@@ -1,0 +1,50 @@
+# EditorConfig is awesome: https://EditorConfig.org
+
+# top-most EditorConfig file
+root = true
+
+# Unix-style newlines with a newline ending every file
+[*]
+end_of_line = lf
+insert_final_newline = true
+charset = utf-8
+trim_trailing_whitespace = true
+
+# Python files
+[*.py]
+indent_style = space
+indent_size = 4
+
+# C/C++ files
+[*.{c,cpp,h,hpp}]
+indent_style = space
+indent_size = 2
+
+# CMake
+[CMakeLists.txt]
+indent_style = space
+indent_size = 2
+
+# YAML files
+[*.{yaml,yml}]
+indent_style = space
+indent_size = 2
+
+# XML files (launch files)
+[*.{xml,launch}]
+indent_style = space
+indent_size = 2
+
+# Markdown
+[*.md]
+trim_trailing_whitespace = false
+
+# Shell scripts
+[*.sh]
+indent_style = space
+indent_size = 2
+
+# Package.xml
+[package.xml]
+indent_style = space
+indent_size = 2

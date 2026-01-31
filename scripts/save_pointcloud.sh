@@ -15,7 +15,7 @@ echo "Looking for LiDAR containers..."
 CONTAINER=$(docker ps -a --filter "name=unitree" --format "{{.Names}}" | head -n 1)
 
 if [ -z "$CONTAINER" ]; then
-    echo "❌ No unitree container found!"
+    echo "No unitree container found!"
     echo "Make sure the container is still running or hasn't been removed."
     exit 1
 fi
@@ -41,11 +41,11 @@ if docker exec $CONTAINER test -f /root/ros2_ws/PCD/scans.pcd; then
         SIZE=$(ls -lh ~/unitree_lidar_project/data/scans.pcd | awk '{print $5}')
         echo "File size: $SIZE"
     else
-        echo "❌ Copy failed!"
+        echo "Copy failed!"
         exit 1
     fi
 else
-    echo "❌ No point cloud file found in container!"
+    echo "No point cloud file found in container!"
     echo "Make sure you've run Point-LIO and created a scan first."
     exit 1
 fi

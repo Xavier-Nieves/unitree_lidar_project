@@ -1,0 +1,15 @@
+{
+  "names": {
+    "point_lio_slam": {
+      "cmake-args": [
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
+      ]
+    },
+    "hailo_inference": {
+      "cmake-args": [
+        "-DCMAKE_BUILD_TYPE=Release"
+      ]
+    }
+  }
+}
