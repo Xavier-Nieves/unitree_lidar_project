@@ -1,0 +1,33 @@
+# Insta360 X3 Camera Calibration
+# Intrinsics + LiDAR-to-Camera extrinsic transform
+
+camera:
+  model: insta360_x3
+  type: equirectangular
+
+  # Equirectangular image dimensions
+  image_width: 5760
+  image_height: 2880
+
+  # Dual fisheye lens parameters (pre-stitching)
+  fisheye:
+    fov_degrees: 200.0
+    lens_count: 2
+
+  # Distortion (post-stitching equirectangular has no distortion model)
+  distortion_model: none
+
+# LiDAR to Camera extrinsic transform
+# Transform that takes a point from LiDAR frame to camera frame
+extrinsic:
+  # Translation [x, y, z] in meters
+  translation: [0.0, 0.0, 0.05]
+
+  # Rotation [roll, pitch, yaw] in radians
+  rotation_rpy: [0.0, 0.0, 0.0]
+
+  # Rotation matrix (alternative representation)
+  rotation_matrix:
+    - [1.0, 0.0, 0.0]
+    - [0.0, 1.0, 0.0]
+    - [0.0, 0.0, 1.0]

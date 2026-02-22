@@ -1,0 +1,330 @@
+#!/bin/bash
+# Unitree LiDAR L1 Main Executable for ROS2 Jazzy on Raspberry Pi 5
+# This script manages the Unitree LiDAR L1 with point_lio integration
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE_DIR="$SCRIPT_DIR/ros2_ws"
+
+# Colors for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Function to print colored messages
+print_info() {
+    echo -e "${BLUE}[INFO]${NC} $1"
+}
+
+print_success() {
+    echo -e "${GREEN}[SUCCESS]${NC} $1"
+}
+
+print_warning() {
+    echo -e "${YELLOW}[WARNING]${NC} $1"
+}
+
+print_error() {
+    echo -e "${RED}[ERROR]${NC} $1"
+}
+
+# Function to check if ROS2 is sourced
+check_ros2() {
+    if [ -z "$ROS_DISTRO" ]; then
+        print_info "Sourcing ROS2 Jazzy..."
+        source /opt/ros/jazzy/setup.bash
+    fi
+
+    if [ "$ROS_DISTRO" != "jazzy" ]; then
+        print_error "Wrong ROS2 distribution. Expected jazzy, got $ROS_DISTRO"
+        exit 1
+    fi
+
+    print_success "ROS2 Jazzy is active"
+}
+
+# Function to check if workspace is built
+check_workspace() {
+    if [ ! -d "$WORKSPACE_DIR/install" ]; then
+        print_warning "Workspace not built yet"
+        return 1
+    fi
+    return 0
+}
+
+# Function to display usage
+usage() {
+    cat << EOF
+${GREEN}Unitree LiDAR L1 - ROS2 Jazzy Control Script${NC}
+
+Usage: $(basename $0) [COMMAND]
+
+Commands:
+    setup       - Set up the ROS2 workspace and install dependencies
+    build       - Build the ROS2 workspace
+    run         - Run Unitree LiDAR L1 only
+    pointlio    - Run Unitree LiDAR L1 with point_lio integration
+    rviz        - Launch RViz for visualization
+    status      - Check system status
+    clean       - Clean build artifacts
+    help        - Show this help message
+
+Examples:
+    $(basename $0) setup        # First time setup
+    $(basename $0) build        # Build workspace
+    $(basename $0) run          # Run LiDAR
+    $(basename $0) pointlio     # Run with point_lio
+
+EOF
+}
+
+# Command: setup
+cmd_setup() {
+    print_info "Setting up Unitree LiDAR L1 workspace..."
+
+    check_ros2
+
+    # Create directories
+    mkdir -p "$WORKSPACE_DIR/src"
+    mkdir -p "$SCRIPT_DIR/config"
+    mkdir -p "$SCRIPT_DIR/logs"
+
+    # Install dependencies
+    print_info "Installing ROS2 dependencies..."
+    sudo apt-get update
+    sudo apt-get install -y \
+        ros-jazzy-pcl-conversions \
+        ros-jazzy-pcl-ros \
+        ros-jazzy-vision-opencv \
+        ros-jazzy-xacro \
+        ros-jazzy-cv-bridge \
+        ros-jazzy-rviz2 \
+        libeigen3-dev \
+        libpcl-dev \
+        libopencv-dev \
+        python3-colcon-common-extensions \
+        git
+
+    # Clone repositories
+    cd "$WORKSPACE_DIR/src"
+
+    if [ ! -d "unilidar_sdk" ]; then
+        print_info "Cloning Unitree LiDAR SDK (unilidar_sdk)..."
+        git clone https://github.com/unitreerobotics/unilidar_sdk.git
+    else
+        print_info "Unitree LiDAR SDK already exists"
+    fi
+
+    if [ ! -d "point_lio_ros2" ]; then
+        print_info "Cloning Point-LIO ROS2..."
+        git clone https://github.com/dfloreaa/point_lio_ros2.git
+    else
+        print_info "Point-LIO ROS2 already exists"
+    fi
+
+    # Add COLCON_IGNORE to ROS1 packages in unilidar_sdk
+    if [ -d "unilidar_sdk" ]; then
+        touch unilidar_sdk/unitree_lidar_ros/COLCON_IGNORE
+        touch unilidar_sdk/unitree_lidar_sdk/COLCON_IGNORE
+        print_info "Configured unilidar_sdk to build only ROS2 packages"
+    fi
+
+    print_success "Setup completed! Run '$(basename $0) build' to build the workspace."
+}
+
+# Command: build
+cmd_build() {
+    print_info "Building ROS2 workspace..."
+
+    check_ros2
+
+    if [ ! -d "$WORKSPACE_DIR/src" ]; then
+        print_error "Workspace not set up. Run '$(basename $0) setup' first."
+        exit 1
+    fi
+
+    cd "$WORKSPACE_DIR"
+
+    print_info "Building with colcon..."
+    colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
+
+    print_success "Build completed!"
+    print_info "Source the workspace: source $WORKSPACE_DIR/install/setup.bash"
+}
+
+# Command: run
+cmd_run() {
+    print_info "Starting Unitree LiDAR L1..."
+
+    check_ros2
+
+    if ! check_workspace; then
+        print_error "Workspace not built. Run '$(basename $0) build' first."
+        exit 1
+    fi
+
+    source "$WORKSPACE_DIR/install/setup.bash"
+
+    print_success "Launching Unitree LiDAR L1..."
+    ros2 launch unitree_lidar_ros2 launch.py
+}
+
+# Command: pointlio
+cmd_pointlio() {
+    print_info "Starting Unitree LiDAR L1 with point_lio..."
+
+    check_ros2
+
+    if ! check_workspace; then
+        print_error "Workspace not built. Run '$(basename $0) build' first."
+        exit 1
+    fi
+
+    source "$WORKSPACE_DIR/install/setup.bash"
+
+    print_success "Launching Unitree LiDAR L1 with point_lio..."
+    print_info "Starting both LiDAR driver and Point-LIO SLAM"
+
+    # Launch combined: LiDAR driver + Point-LIO SLAM
+    ros2 launch point_lio combined_lidar_mapping.launch.py
+}
+
+# Command: rviz
+cmd_rviz() {
+    print_info "Launching RViz2 for visualization..."
+
+    check_ros2
+
+    if ! check_workspace; then
+        print_error "Workspace not built. Run '$(basename $0) build' first."
+        exit 1
+    fi
+
+    source "$WORKSPACE_DIR/install/setup.bash"
+
+    rviz2
+}
+
+# Command: status
+cmd_status() {
+    echo "======================================"
+    echo "Unitree LiDAR L1 System Status"
+    echo "======================================"
+
+    # Check ROS2
+    if [ -z "$ROS_DISTRO" ]; then
+        source /opt/ros/jazzy/setup.bash 2>/dev/null || true
+    fi
+
+    if [ ! -z "$ROS_DISTRO" ]; then
+        print_success "ROS2 Distribution: $ROS_DISTRO"
+    else
+        print_error "ROS2 not found"
+    fi
+
+    # Check workspace
+    if [ -d "$WORKSPACE_DIR/src" ]; then
+        print_success "Workspace source directory exists"
+
+        if [ -d "$WORKSPACE_DIR/install" ]; then
+            print_success "Workspace is built"
+        else
+            print_warning "Workspace not built yet"
+        fi
+
+        # Check packages
+        if [ -d "$WORKSPACE_DIR/src/unilidar_sdk" ]; then
+            print_success "Unitree LiDAR SDK (unilidar_sdk) found"
+        else
+            print_warning "Unitree LiDAR SDK not found"
+        fi
+
+        if [ -d "$WORKSPACE_DIR/src/point_lio_ros2" ]; then
+            print_success "Point-LIO ROS2 found"
+        else
+            print_warning "Point-LIO ROS2 not found"
+        fi
+    else
+        print_warning "Workspace not set up yet"
+    fi
+
+    # Check for running nodes
+    if ! check_workspace; then
+        print_info "Cannot check running nodes (workspace not built)"
+    else
+        source "$WORKSPACE_DIR/install/setup.bash" 2>/dev/null
+        print_info "Checking for running ROS2 nodes..."
+        ros2 node list 2>/dev/null || print_info "No ROS2 nodes running"
+    fi
+
+    echo "======================================"
+}
+
+# Command: clean
+cmd_clean() {
+    print_warning "Cleaning build artifacts..."
+
+    if [ -d "$WORKSPACE_DIR/build" ]; then
+        rm -rf "$WORKSPACE_DIR/build"
+        print_success "Removed build directory"
+    fi
+
+    if [ -d "$WORKSPACE_DIR/install" ]; then
+        rm -rf "$WORKSPACE_DIR/install"
+        print_success "Removed install directory"
+    fi
+
+    if [ -d "$WORKSPACE_DIR/log" ]; then
+        rm -rf "$WORKSPACE_DIR/log"
+        print_success "Removed log directory"
+    fi
+
+    print_success "Clean complete! Run '$(basename $0) build' to rebuild."
+}
+
+# Main script logic
+main() {
+    if [ $# -eq 0 ]; then
+        usage
+        exit 0
+    fi
+
+    case "$1" in
+        setup)
+            cmd_setup
+            ;;
+        build)
+            cmd_build
+            ;;
+        run)
+            cmd_run
+            ;;
+        pointlio)
+            cmd_pointlio
+            ;;
+        rviz)
+            cmd_rviz
+            ;;
+        status)
+            cmd_status
+            ;;
+        clean)
+            cmd_clean
+            ;;
+        help|--help|-h)
+            usage
+            ;;
+        *)
+            print_error "Unknown command: $1"
+            echo ""
+            usage
+            exit 1
+            ;;
+    esac
+}
+
+# Run main function
+main "$@"

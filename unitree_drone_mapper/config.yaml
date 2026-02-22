@@ -1,0 +1,72 @@
+# Autonomous Drone Mapping System — Configuration
+# All system parameters in one place
+
+# System
+system:
+  ros_distro: jazzy
+  data_dir: ~/unitree_drone_mapper/data/flights
+  log_level: INFO
+
+# Hardware
+lidar:
+  device: /dev/ttyUSB0
+  model: unitree_l1
+  range_min: 0.1
+  range_max: 50.0
+  cloud_scan_num: 18
+  rotate_yaw_bias: 0.0
+  range_scale: 0.001
+
+imu:
+  source: lidar_internal  # L1 has built-in IMU
+
+camera:
+  model: insta360_x3
+  wifi_ssid: Insta360_X3_XXXX
+  capture_interval_m: 2.0  # meters between captures
+  resolution: [5760, 2880]  # equirectangular
+  video_device: /dev/video0
+  jpeg_quality: 95
+
+px4:
+  connection: /dev/ttyACM0:921600
+  dds_port: 8888
+
+# Flight
+flight:
+  takeoff_altitude: 5.0
+  cruise_speed: 2.0
+  collision_min_distance_m: 2.0
+  rtl_battery_percent: 25
+
+# SLAM
+slam:
+  point_lio_config: config/point_lio_params.yaml
+  save_trajectory: true
+  save_cloud: true
+  use_imu_as_input: false
+  prop_at_freq_of_imu: true
+  point_filter_num: 1
+  filter_size_surf: 0.1
+  filter_size_map: 0.1
+
+# Mapping Pipeline
+mapping:
+  cloud_cleaning:
+    outlier_neighbors: 20
+    outlier_std_ratio: 2.0
+    voxel_size: 0.02  # meters, 0 = no downsampling
+  meshing:
+    method: poisson
+    poisson_depth: 9
+  texturing:
+    projection: spherical  # direct equirectangular projection
+    blend_overlapping: true
+    max_images: 500
+  output_formats: [obj]
+
+# Calibration
+calibration:
+  lidar_to_camera:
+    translation: [0.0, 0.0, 0.05]  # [x, y, z] meters
+    rotation: [0.0, 0.0, 0.0]      # [roll, pitch, yaw] radians

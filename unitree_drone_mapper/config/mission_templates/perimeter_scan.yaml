@@ -1,0 +1,30 @@
+# Perimeter Scan Mission Template
+# Fly around the perimeter of a defined area
+
+mission:
+  name: perimeter_scan
+  type: perimeter
+
+  # Perimeter waypoints (relative to takeoff, meters)
+  # Define corners of the area to scan
+  waypoints:
+    - [0.0, 0.0, 5.0]
+    - [20.0, 0.0, 5.0]
+    - [20.0, 15.0, 5.0]
+    - [0.0, 15.0, 5.0]
+
+  # Flight parameters
+  speed: 1.5          # m/s
+  altitude: 5.0       # meters AGL
+  yaw_mode: auto      # auto (face direction of travel) or fixed
+
+  # Camera capture
+  camera:
+    trigger_mode: distance
+    trigger_interval: 1.5  # meters
+
+  # Repeat
+  laps: 1
+
+  # Return behavior
+  on_complete: rtl

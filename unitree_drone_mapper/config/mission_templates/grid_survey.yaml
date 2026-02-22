@@ -1,0 +1,27 @@
+# Grid Survey Mission Template
+# Systematic grid pattern for area coverage
+
+mission:
+  name: grid_survey
+  type: survey
+
+  # Survey area (relative to takeoff point)
+  area:
+    length: 20.0   # meters (X direction)
+    width: 15.0    # meters (Y direction)
+    altitude: 5.0  # meters AGL
+
+  # Grid parameters
+  grid:
+    line_spacing: 3.0    # meters between grid lines
+    speed: 2.0           # m/s cruise speed
+    direction: 0.0       # degrees, 0 = North
+    overlap_percent: 30  # overlap between lines
+
+  # Camera capture
+  camera:
+    trigger_mode: distance  # distance or time
+    trigger_interval: 2.0   # meters (if distance) or seconds (if time)
+
+  # Return behavior
+  on_complete: rtl  # rtl, land, hover

@@ -1,0 +1,56 @@
+# ROS 2 / Colcon
+ws/build/
+ws/install/
+ws/log/
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+*.pyc
+__pycache__/
+
+# Bags and data
+*.bag
+*.db3
+*.mcap
+data/*.pcd
+data/*.obj
+data/*.ply
+data/*.stl
+data/my_scan/
+logs/
+maps/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Python
+*.py[cod]
+*$py.class
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# C++
+*.o
+*.so
+*.a
+build/
+devel/
+
+# OS
+.DS_Store
+Thumbs.db
+*.log
+
+# Docker
+.dockerignore
+
+# Temporary files
+*.tmp
+*.temp

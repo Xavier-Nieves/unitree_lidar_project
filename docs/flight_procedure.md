@@ -4,131 +4,63 @@
 
 ### Hardware
 - [ ] Battery fully charged
-- [ ] All sensors powered on
-- [ ] LiDAR spinning/active
-- [ ] Camera feed visible
-- [ ] MAVLink telemetry active
-- [ ] Hailo AI accelerator detected
-- [ ] GPS lock (if used)
+- [ ] LiDAR connected and spinning
+- [ ] PX4 connected and armed-ready
+- [ ] Insta360 X3 powered on, WiFi connected
 - [ ] Propellers secure
+- [ ] GPS lock (if used)
 
 ### Software
-- [ ] ROS 2 workspace sourced
-- [ ] All nodes launching successfully
-- [ ] TF tree valid (no missing transforms)
-- [ ] Health monitor shows green
-- [ ] Recording bag file (optional)
-
----
-
-## Launch Sequence
-
-### 1. Start Core System
 ```bash
-# Source workspace
-source ws/install/setup.bash
+# Run health check
+python3 main.py check
 
-# Launch full system
-ros2 launch system/launch full_system.launch.py
+# Expected output: all [OK]
 ```
 
-### 2. Verify Node Health
-```bash
-# Check all nodes are running
-ros2 node list
+## Flight Modes
 
-# Check topics are publishing
-ros2 topic list
-ros2 topic hz /cloud_registered
-ros2 topic hz /odometry
+### Full Autonomous
+```bash
+python3 main.py fly --mission config/mission_templates/grid_survey.yaml
 ```
 
-### 3. Start Mission
+### Handheld Scan (No Flight)
 ```bash
-# Upload mission waypoints
-ros2 service call /mission/upload custom_msgs/srv/UploadMission "..."
-
-# Arm and takeoff
-ros2 topic pub /mission/command std_msgs/String "data: 'arm'"
-ros2 topic pub /mission/command std_msgs/String "data: 'takeoff'"
+python3 main.py scan
+# Walk around, Ctrl+C when done
 ```
 
----
-
-## In-Flight Operations
-
-### Monitoring
-- Watch health monitor status
-- Check Point-LIO odometry drift
-- Monitor battery level
-- Verify detections (if using AI)
-
-### Data Collection
+### Process Only
 ```bash
-# Start recording
-ros2 bag record -a -o my_flight_$(date +%Y%m%d_%H%M%S)
+python3 main.py process --latest
+# or
+python3 main.py process --session 20260222_143000
 ```
 
-### Emergency Procedures
-- **Lost GPS**: Switch to Point-LIO odometry
-- **Low Battery**: Automatic RTL (Return to Launch)
-- **Sensor Failure**: Failsafe manager triggers safe landing
+## During Flight
 
----
+- Monitor terminal output for warnings
+- Battery auto-RTL at configured threshold (default 25%)
+- Collision avoidance is active automatically
+- Camera triggers at each waypoint
+
+## Emergency Procedures
+
+- **Lost link**: PX4 failsafe triggers RTL automatically
+- **Low battery**: System triggers RTL at threshold
+- **Obstacle detected**: Collision avoidance holds position
+- **Manual override**: Always keep RC transmitter ready
 
 ## Post-Flight
 
-### 1. Land and Disarm
-```bash
-ros2 topic pub /mission/command std_msgs/String "data: 'land'"
-ros2 topic pub /mission/command std_msgs/String "data: 'disarm'"
-```
-
-### 2. Stop Recording
-```bash
-# Ctrl+C to stop bag recording
-# Verify bag file size and duration
-ros2 bag info my_flight_*.db3
-```
-
-### 3. Process Data
-```bash
-# Extract point cloud
-python3 ws/src/tools/bag_tools/bag_to_pcd.py my_flight.db3
-
-# Generate mesh
-python3 ws/src/tools/cloudcompare_utils/auto_mesh_generator.py
-```
-
-### 4. Shutdown System
-```bash
-# Graceful shutdown
-ros2 lifecycle set /all shutdown
-
-# Or kill all
-pkill -9 -f ros
-```
-
----
-
-## Safety Considerations
-
-### Environmental
-- Avoid flying in high winds (>15 mph)
-- Check for GPS interference
-- Ensure clear line of sight
-- Respect airspace regulations
-
-### Technical
-- Always have manual control override
-- Test failsafe modes on ground
-- Keep backup battery charged
-- Monitor compute temperature
-
----
-
-## TODO
-- [ ] Add mission planning GUI instructions
-- [ ] Document specific flight modes
-- [ ] Create video tutorials
-- [ ] Add failure recovery procedures
+1. Wait for landing and disarm
+2. Check data was saved:
+   ```bash
+   ls data/flights/
+   ```
+3. Process the flight:
+   ```bash
+   python3 main.py process --latest
+   ```
+4. Output model is in `data/flights/SESSION/processed/model_textured/`

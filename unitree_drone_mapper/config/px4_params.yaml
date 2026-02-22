@@ -1,0 +1,26 @@
+# PX4 Flight Parameters
+# DDS-based offboard control parameters
+
+px4:
+  ros__parameters:
+    # Connection
+    serial_port: /dev/ttyACM0
+    baudrate: 921600
+    dds_port: 8888
+
+    # Offboard control
+    offboard_timeout_ms: 500
+    heartbeat_interval_ms: 100
+
+    # Safety limits
+    max_velocity_xy: 3.0    # m/s
+    max_velocity_z: 2.0     # m/s
+    max_yaw_rate: 45.0      # deg/s
+    geofence_radius: 100.0  # meters
+    geofence_altitude: 50.0 # meters
+
+    # Failsafe
+    low_battery_threshold: 25  # percent
+    critical_battery_threshold: 15
+    lost_link_timeout_s: 5.0
+    failsafe_action: "rtl"  # rtl, land, hold
