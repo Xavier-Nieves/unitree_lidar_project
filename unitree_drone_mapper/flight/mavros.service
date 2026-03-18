@@ -1,0 +1,30 @@
+[Unit]
+Description=MAVROS — MAVLink bridge to Pixhawk 6X (PX4, /dev/ttyACM0)
+# Start after hotspot is up so Foxglove can see topics immediately.
+# Does not depend on Point-LIO — MAVROS is always running so the pilot
+# can monitor state in Foxglove before the flight stack activates.
+After=dronepi-hotspot.service network.target
+Wants=dronepi-hotspot.service
+
+[Service]
+Type=simple
+User=dronepi
+Environment="HOME=/home/dronepi"
+
+# Source ROS 2 Jazzy and launch MAVROS with PX4 config.
+# fcu_url uses the USB serial connection to the Pixhawk 6X.
+# Restart=on-failure ensures MAVROS recovers if the USB connection
+# is briefly lost (e.g. cable wiggle during flight prep).
+ExecStart=/bin/bash -c "\
+    source /opt/ros/jazzy/setup.bash && \
+    ros2 launch mavros px4.launch \
+        fcu_url:=serial:///dev/ttyACM0:57600"
+
+Restart=on-failure
+RestartSec=5
+
+# Give MAVROS time to shut down gracefully before SIGKILL
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

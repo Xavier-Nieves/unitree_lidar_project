@@ -169,46 +169,37 @@
   }
 
   /* ── view cube ── */
-  /*
-   * Pure CSS 3D cube rendered as a fixed overlay in the top-right corner.
-   * The cube is a perspective div containing six absolutely-positioned faces.
-   * Each face is a clickable button that snaps the camera to a preset view.
-   * The cube CSS transform is updated on every updateCamera() call to mirror
-   * the current orbit state -- it always shows where you are looking from.
-   * Implemented as a DOM overlay, not inside the WebGL canvas, so it has
-   * zero impact on renderer FPS.
-   */
   #view-cube-wrap {
     position: fixed;
-    top: 66px;
-    right: 16px;
-    width: 60px;
-    height: 76px;
+    top: 86px;
+    right: 36px;
+    width: 45px;
+    height: 55px;
     z-index: 100;
-    perspective: 200px;
+    perspective: 150px;
     transition: right 0.3s ease;
   }
 
-  body.sidebar-open #view-cube-wrap { right: 376px; }
+  body.sidebar-open #view-cube-wrap { right: 396px; }
 
   #view-cube {
-    width: 60px;
-    height: 60px;
+    width: 45px;
+    height: 45px;
     position: relative;
     transform-style: preserve-3d;
   }
 
   .vc-face {
     position: absolute;
-    width: 60px;
-    height: 60px;
+    width: 45px;
+    height: 45px;
     display: flex;
     align-items: center;
     justify-content: center;
     font-family: 'Courier New', monospace;
-    font-size: 10px;
+    font-size: 7px;
     font-weight: bold;
-    letter-spacing: 1.5px;
+    letter-spacing: 1px;
     text-transform: uppercase;
     cursor: pointer;
     border: 1px solid rgba(74,158,255,0.25);
@@ -226,450 +217,334 @@
     border-color: rgba(74,158,255,0.7);
   }
 
-  /* six face transforms -- 40px = half of 80px cube size */
-  .vc-front  { transform: translateZ(30px); }
-  .vc-back   { transform: rotateY(180deg) translateZ(30px); }
-  .vc-right  { transform: rotateY( 90deg) translateZ(30px); }
-  .vc-left   { transform: rotateY(-90deg) translateZ(30px); }
-  .vc-top    { transform: rotateX( 90deg) translateZ(30px); }
-  .vc-bottom { transform: rotateX(-90deg) translateZ(30px); }
+  /* six face transforms */
+  .vc-front  { transform: translateZ(22.5px); }
+  .vc-back   { transform: rotateY(180deg) translateZ(22.5px); }
+  .vc-right  { transform: rotateY( 90deg) translateZ(22.5px); }
+  .vc-left   { transform: rotateY(-90deg) translateZ(22.5px); }
+  .vc-top    { transform: rotateX( 90deg) translateZ(22.5px); }
+  .vc-bottom { transform: rotateX(-90deg) translateZ(22.5px); }
 
-  /* axis lines -- three lines intersecting at the cube center, each passing
-   * through both opposing faces and extending beyond them with an arrowhead
-   * at the positive tip and a label, exactly as in Fusion 360.
-   *
-   * Each axis is a single 100px-wide div (cube = 60px, so 20px overhang
-   * on each side). Centered on the cube via top/left 50% + negative margins.
-   * Rotated into its axis direction via CSS 3D transforms.
-   * The arrowhead is a CSS border triangle on the ::after pseudo-element.
-   * All three are children of #view-cube so syncCube() rotates them freely. */
+  /* axis lines */
+  #vc-axes-root {
+    position: absolute;
+    top: 22.5px;
+    left: 22.5px;
+    width: 0;
+    height: 0;
+    transform-style: preserve-3d;
+  }
 
   .vc-axis {
     position: absolute;
+    width: 70px;
+    height: 2px;
+    left: -35px;
+    top: -1px;
     pointer-events: none;
-    /* 100px = 60px cube + 20px overhang each side */
-    width: 100px;
-    height: 2px;
-    top: 50%;
-    left: 50%;
-    margin-top: -1px;
-    margin-left: -50px;
-    transform-style: preserve-3d;
   }
-  .vc-axis-line {
-    position: absolute;
-    top: 0; left: 0; right: 0;
-    height: 2px;
-    border-radius: 1px;
-  }
-  /* arrowhead at positive tip */
-  .vc-axis-line::after {
+
+  .vc-axis::before,
+  .vc-axis::after {
     content: '';
     position: absolute;
-    right: -5px;
-    top: -3px;
-    width: 0; height: 0;
-    border-top:    4px solid transparent;
-    border-bottom: 4px solid transparent;
-  }
-  .vc-axis-label {
-    position: absolute;
-    font-family: 'Courier New', monospace;
-    font-size: 9px;
-    font-weight: bold;
-    line-height: 1;
-    top: -4px;
-    right: -16px;
+    top: 0;
+    width: 50%;
+    height: 100%;
   }
 
-  /* X axis -- red, runs left-right (no rotation needed, default horizontal) */
-  .vc-axis-x                        { transform: translateX(0) translateY(0); }
-  .vc-axis-x .vc-axis-line          { background: #ff4444; }
-  .vc-axis-x .vc-axis-line::after   { border-left: 7px solid #ff4444; }
-  .vc-axis-x .vc-axis-label         { color: #ff4444; }
+  .vc-axis::before { left: 0; }
+  .vc-axis::after  { right: 0; }
 
-  /* Y axis -- green, runs front-back (rotated 90deg around Z in the cube plane) */
-  .vc-axis-y                        { transform: rotate(90deg); }
-  .vc-axis-y .vc-axis-line          { background: #44dd44; }
-  .vc-axis-y .vc-axis-line::after   { border-left: 7px solid #44dd44; }
-  .vc-axis-y .vc-axis-label         { color: #44dd44; }
+  .vc-axis.x { transform: none; }
+  .vc-axis.y { transform: rotateZ(90deg); }
+  .vc-axis.z { transform: rotateY(90deg); }
 
-  /* Z axis -- blue, runs top-bottom (rotated into depth via 3D transforms) */
-  .vc-axis-z                        { transform: rotateY(90deg) rotateZ(90deg); }
-  .vc-axis-z .vc-axis-line          { background: #4488ff; }
-  .vc-axis-z .vc-axis-line::after   { border-left: 7px solid #4488ff; }
-  .vc-axis-z .vc-axis-label         { color: #4488ff; }
+  .vc-axis.x::before { background: linear-gradient(to right, rgba(255,80,80,0.5), rgba(255,80,80,0)); }
+  .vc-axis.x::after  { background: linear-gradient(to right, rgba(255,80,80,0), rgba(255,80,80,1)); }
+  .vc-axis.y::before { background: linear-gradient(to right, rgba(80,200,80,0.5), rgba(80,200,80,0)); }
+  .vc-axis.y::after  { background: linear-gradient(to right, rgba(80,200,80,0), rgba(80,200,80,1)); }
+  .vc-axis.z::before { background: linear-gradient(to right, rgba(80,150,255,0.5), rgba(80,150,255,0)); }
+  .vc-axis.z::after  { background: linear-gradient(to right, rgba(80,150,255,0), rgba(80,150,255,1)); }
 
-  #view-cube-axes {
-    position: absolute;
+  #vc-label {
+    text-align: center;
+    margin-top: 20px;
+    font-size: 12px;
+    letter-spacing: 1px;
+    color: #3a5a7a;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  /* ── stats bar ── */
+  #stats-bar {
+    position: fixed;
     bottom: 0; left: 0; right: 0;
-    text-align: center;
-    font-size: 9px;
-    font-family: 'Courier New', monospace;
-    color: #2a4a6a;
-    letter-spacing: 1px;
-    pointer-events: none;
-  }
-
-  /* ── controls hint ── */
-  #controls-hint {
-    position: fixed;
-    bottom: 12px;
-    right: 16px;
-    font-size: 10px;
-    color: #2a4a6a;
-    line-height: 1.8;
-    text-align: right;
-    z-index: 100;
-    transition: right 0.3s ease;
-  }
-
-  /* ── stats panel ── */
-  #stats-panel {
-    position: fixed;
-    bottom: 12px;
-    left: 16px;
-    font-size: 10px;
-    color: #3a5a7a;
-    line-height: 1.8;
-    z-index: 100;
-  }
-
-  #stats-panel span { color: #5a8aaa; }
-
-  /* ── color mode indicator ── */
-  #color-mode-badge {
-    font-size: 10px;
-    color: #3a6a5a;
-    letter-spacing: 1px;
-  }
-  #color-mode-badge span { color: #4adf9a; }
-
-  /* ═══════════════════════════════════════════════════════
-     FLIGHT DATABASE SIDEBAR
-  ═══════════════════════════════════════════════════════ */
-  #sidebar {
-    position: fixed;
-    top: 50px; right: -360px; bottom: 0;
-    width: 360px;
-    background: rgba(10,12,18,0.97);
-    border-left: 1px solid #1e2a3a;
-    z-index: 90;
-    display: flex;
-    flex-direction: column;
-    transition: right 0.3s ease;
-    backdrop-filter: blur(12px);
-  }
-
-  #sidebar.open { right: 0; }
-
-  /* when sidebar is open, shrink the canvas viewport */
-  body.sidebar-open #canvas-wrap  { right: 360px; }
-  body.sidebar-open #controls-hint { right: 376px; }
-
-  #sidebar-header {
-    padding: 14px 16px;
-    border-bottom: 1px solid #1e2a3a;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-shrink: 0;
-  }
-
-  #sidebar-title {
-    font-size: 11px;
-    letter-spacing: 2px;
-    color: #4a9eff;
-    text-transform: uppercase;
-  }
-
-  #sidebar-close {
-    background: none;
-    border: none;
-    color: #3a5a7a;
-    font-size: 16px;
-    cursor: pointer;
-    padding: 2px 6px;
-    font-family: 'Courier New', monospace;
-    transition: color 0.2s;
-  }
-  #sidebar-close:hover { color: #df4a4a; }
-
-  /* db stats strip */
-  #db-stats {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    border-bottom: 1px solid #1e2a3a;
-    flex-shrink: 0;
-  }
-
-  .db-stat {
-    padding: 10px 14px;
-    border-right: 1px solid #1e2a3a;
-    text-align: center;
-  }
-  .db-stat:last-child { border-right: none; }
-  .db-stat-label { font-size: 9px; color: #3a5a7a; letter-spacing: 1px; text-transform: uppercase; }
-  .db-stat-val   { font-size: 18px; color: #4a9eff; margin-top: 2px; }
-
-  /* search */
-  #db-search-wrap {
-    padding: 10px 12px;
-    border-bottom: 1px solid #1e2a3a;
-    flex-shrink: 0;
-  }
-
-  #db-search {
-    width: 100%;
-    background: #0e1218;
-    border: 1px solid #1e2a3a;
-    color: #c0cfe0;
-    font-family: 'Courier New', monospace;
-    font-size: 11px;
-    padding: 7px 10px;
-    outline: none;
-    transition: border-color 0.2s;
-  }
-  #db-search:focus    { border-color: #4a9eff; }
-  #db-search::placeholder { color: #2a4a6a; }
-
-  /* flight list */
-  #flight-list {
-    flex: 1;
-    overflow-y: auto;
-    scrollbar-width: thin;
-    scrollbar-color: #1e2a3a transparent;
-  }
-  #flight-list::-webkit-scrollbar       { width: 4px; }
-  #flight-list::-webkit-scrollbar-thumb { background: #1e2a3a; border-radius: 2px; }
-
-  .flight-item {
-    padding: 12px 14px;
-    border-bottom: 1px solid #0e1620;
-    cursor: pointer;
-    transition: background 0.15s;
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-  }
-  .flight-item:hover { background: rgba(74,158,255,0.05); }
-  .flight-item.current { background: rgba(74,158,255,0.08); border-left: 2px solid #4a9eff; }
-
-  .fi-top {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-
-  .fi-id    { font-size: 11px; color: #4a9eff; font-weight: bold; }
-  .fi-time  { font-size: 10px; color: #3a5a7a; }
-
-  .fi-meta  { font-size: 10px; color: #4a6a8a; }
-  .fi-meta span { color: #7a9ab8; }
-
-  .fi-chips { display: flex; gap: 5px; margin-top: 2px; }
-  .chip {
-    font-size: 9px; padding: 2px 6px;
-    border: 1px solid #2a3a50; color: #3a5a7a;
-    letter-spacing: 0.5px;
-  }
-  .chip.ply { border-color: rgba(74,158,255,0.4); color: #4a9eff; }
-  .chip.bag { border-color: rgba(74,220,154,0.3); color: #4adf9a; }
-  .chip.pcd { border-color: rgba(255,180,74,0.3); color: #ffb44a; }
-
-  .fi-status {
-    font-size: 9px; padding: 1px 6px;
-    letter-spacing: 0.5px;
-  }
-  .fi-status.ok   { color: #4adf7a; border: 1px solid rgba(74,223,122,0.3); }
-  .fi-status.warn { color: #ffb44a; border: 1px solid rgba(255,180,74,0.3); }
-  .fi-status.fail { color: #df4a4a; border: 1px solid rgba(223,74,74,0.3); }
-
-  .fi-load-btn {
-    margin-top: 4px;
-    align-self: flex-start;
-    font-family: 'Courier New', monospace;
-    font-size: 9px;
-    letter-spacing: 1px;
-    padding: 3px 10px;
-    background: transparent;
-    border: 1px solid #2a3a50;
-    color: #4a6a8a;
-    cursor: pointer;
-    text-transform: uppercase;
-    transition: all 0.18s;
-  }
-  .fi-load-btn:hover { border-color: #4a9eff; color: #4a9eff; }
-
-  /* download row */
-  #sidebar-footer {
-    padding: 12px 14px;
+    height: 28px;
+    background: rgba(10,12,16,0.9);
     border-top: 1px solid #1e2a3a;
-    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    padding: 0 16px;
+    gap: 24px;
+    font-size: 10px;
+    color: #4a6a8a;
+    z-index: 100;
+    transition: right 0.3s ease;
   }
-  #sidebar-footer-title {
-    font-size: 9px; color: #3a5a7a; letter-spacing: 1px;
-    text-transform: uppercase; margin-bottom: 8px;
-  }
+  body.sidebar-open #stats-bar { right: 360px; }
+
+  .stat { display: flex; gap: 6px; }
+  .stat-label { color: #2a4a6a; text-transform: uppercase; letter-spacing: 1px; }
+  .stat-value { color: #7a9aba; }
+
+  #stat-fps { min-width: 24px; }
+
   #dl-btn {
-    width: 100%;
+    margin-left: auto;
     font-family: 'Courier New', monospace;
     font-size: 10px;
     letter-spacing: 1px;
-    padding: 8px 0;
+    padding: 4px 10px;
     background: transparent;
     border: 1px solid #2a3a50;
     color: #4a6a8a;
     cursor: pointer;
     text-transform: uppercase;
     transition: all 0.2s;
-    display: flex; align-items: center; justify-content: center; gap: 8px;
   }
-  #dl-btn:hover   { border-color: #4a9eff; color: #4a9eff; background: rgba(74,158,255,0.06); }
-  #dl-btn:disabled { opacity: 0.3; cursor: default; }
+  #dl-btn:hover:not(:disabled) { border-color: #4a9eff; color: #4a9eff; }
+  #dl-btn:disabled { opacity: 0.35; cursor: default; }
 
-  /* db status note */
+  /* ── sidebar ── */
+  #sidebar {
+    position: fixed;
+    top: 48px; right: -360px; bottom: 0;
+    width: 360px;
+    background: rgba(10,14,20,0.96);
+    border-left: 1px solid #1e2a3a;
+    z-index: 90;
+    transition: right 0.3s ease;
+    display: flex;
+    flex-direction: column;
+    backdrop-filter: blur(12px);
+  }
+  #sidebar.open { right: 0; }
+  body.sidebar-open #canvas-wrap { right: 360px; }
+
+  #sidebar-header {
+    padding: 16px;
+    border-bottom: 1px solid #1e2a3a;
+  }
+  #sidebar-header h2 {
+    font-size: 12px;
+    letter-spacing: 2px;
+    color: #4a9eff;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+  }
+
+  #db-stats {
+    display: flex;
+    gap: 16px;
+    font-size: 10px;
+    color: #4a6a8a;
+  }
+  #db-stats .ds-item { display: flex; flex-direction: column; gap: 2px; }
+  #db-stats .ds-val  { color: #7a9aba; font-size: 14px; }
+  #db-stats .ds-lbl  { text-transform: uppercase; letter-spacing: 1px; }
+
+  #search-wrap {
+    padding: 12px 16px;
+    border-bottom: 1px solid #1e2a3a;
+  }
+  #search-input {
+    width: 100%;
+    background: #0a0e14;
+    border: 1px solid #1e2a3a;
+    border-radius: 4px;
+    padding: 8px 10px;
+    font-family: 'Courier New', monospace;
+    font-size: 11px;
+    color: #c0cfe0;
+    outline: none;
+    transition: border-color 0.2s;
+  }
+  #search-input::placeholder { color: #3a4a5a; }
+  #search-input:focus { border-color: #4a7aaa; }
+
+  #flight-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 0;
+  }
+
+  .flight-item {
+    padding: 12px 16px;
+    border-bottom: 1px solid #14181e;
+    cursor: default;
+    transition: background 0.15s;
+  }
+  .flight-item:hover { background: rgba(74,158,255,0.04); }
+  .flight-item.current { background: rgba(74,158,255,0.08); border-left: 2px solid #4a9eff; }
+
+  .fi-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+  .fi-id { font-size: 12px; color: #c0cfe0; letter-spacing: 1px; }
+  .fi-status { font-size: 9px; letter-spacing: 1px; padding: 2px 6px; border-radius: 3px; }
+  .fi-status.ok   { background: rgba(80,200,120,0.15); color: #4adf7a; }
+  .fi-status.warn { background: rgba(220,180,60,0.15); color: #dcb43c; }
+  .fi-status.fail { background: rgba(220,80,80,0.15);  color: #dc5050; }
+
+  .fi-meta { font-size: 10px; color: #4a6a8a; margin-bottom: 6px; }
+
+  .fi-chips { display: flex; gap: 6px; margin-bottom: 8px; }
+  .chip {
+    font-size: 9px;
+    letter-spacing: 1px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    background: #1a2030;
+    color: #5a7a9a;
+  }
+  .chip.ply { background: rgba(74,158,255,0.12); color: #4a9eff; }
+  .chip.bag { background: rgba(180,120,220,0.12); color: #b478dc; }
+  .chip.pcd { background: rgba(80,200,180,0.12); color: #50c8b4; }
+
+  .fi-load-btn {
+    font-family: 'Courier New', monospace;
+    font-size: 10px;
+    letter-spacing: 1px;
+    padding: 5px 10px;
+    background: transparent;
+    border: 1px solid #2a3a50;
+    color: #4a6a8a;
+    cursor: pointer;
+    text-transform: uppercase;
+    transition: all 0.2s;
+  }
+  .fi-load-btn:hover { border-color: #4a9eff; color: #4a9eff; }
+
   #db-note {
-    font-size: 9px; color: #2a4a6a;
-    text-align: center; padding: 16px 14px;
-    letter-spacing: 0.5px; line-height: 1.8;
+    padding: 16px;
+    font-size: 11px;
+    color: #3a5a7a;
+    line-height: 1.5;
   }
 </style>
 </head>
+
 <body>
 
-<!-- Header -->
+<!-- ═══════════════════════════════════════════════════════════════════════════
+  HEADER BAR
+═══════════════════════════════════════════════════════════════════════════ -->
 <div id="header">
-  <div class="logo">&#9670; DronePi</div>
+  <div class="logo">DronePi</div>
   <div class="divider"></div>
   <div id="flight-info">
     <span id="info-flight">—</span>
-    <span id="info-points">—</span>
-    <span id="info-time">—</span>
+    <span id="info-points"></span>
+    <span id="info-time"></span>
   </div>
-  <div id="color-mode-badge">Color: <span id="color-mode-label">—</span></div>
+
+  <!-- View mode toggle -->
+  <button id="view-cloud-btn" class="header-btn active" onclick="switchViewMode('cloud')" title="Point cloud view">Cloud</button>
+  <button id="view-mesh-btn"  class="header-btn" onclick="switchViewMode('mesh')" title="Poisson mesh view" disabled style="opacity:0.35">Mesh</button>
+
   <div class="divider"></div>
-  <button class="header-btn" id="view-cloud-btn" onclick="switchViewMode('cloud')" disabled>&#9632; Cloud</button>
-  <button class="header-btn" id="view-mesh-btn"  onclick="switchViewMode('mesh')"  disabled>&#9650; Mesh</button>
-  <div class="divider"></div>
-  <button class="header-btn" id="dl-header-btn" onclick="downloadCurrentPLY()" disabled title="Download loaded file as PLY">&#8595; PLY</button>
-  <button class="header-btn" id="flights-btn" onclick="toggleSidebar()">Flights &#9776;</button>
-  <div class="divider"></div>
-  <div id="status-pill" class="waiting">WAITING FOR OUTPUT</div>
+
+  <button id="flights-btn" class="header-btn" onclick="toggleSidebar()">Flights</button>
+  <button id="dl-header-btn" class="header-btn" onclick="downloadCurrentPLY()" disabled>↓ PLY</button>
+
+  <div id="status-pill" class="waiting">WAITING</div>
 </div>
 
-<!-- Progress -->
 <div id="progress-wrap"><div id="progress-bar"></div></div>
 
-<!-- Three.js canvas -->
-<div id="canvas-wrap"><canvas id="canvas"></canvas></div>
-
-<!-- Waiting overlay -->
-<div id="overlay">
-  <div class="pulse-ring"><div class="drone-icon">&#128641;</div></div>
-  <div id="overlay-title">Waiting for output</div>
-  <div id="overlay-sub">Polling every 10s — mesh will load automatically after flight</div>
-</div>
-
-<!-- Controls hint -->
-<div id="controls-hint">
-  Left drag — orbit<br>
-  Right drag — pan<br>
-  Scroll — zoom
-</div>
-
-<!-- View cube — top-right corner, mirrors current orbit orientation.
-     Axis stubs protrude from the cube faces: X=red, Y=green, Z=blue.
-     Each stub is a child of #view-cube so it rotates with the cube.
-     The stub is a 3D-translated div: line + label positioned at the tip.
-     Cube half-size = 30px. Stubs protrude 20px beyond the face. -->
+<!-- ═══════════════════════════════════════════════════════════════════════════
+  VIEW CUBE
+═══════════════════════════════════════════════════════════════════════════ -->
 <div id="view-cube-wrap">
   <div id="view-cube">
+    <div class="vc-face vc-front"  onclick="snapView('front')">Front</div>
+    <div class="vc-face vc-back"   onclick="snapView('back')">Back</div>
+    <div class="vc-face vc-right"  onclick="snapView('right')">Right</div>
+    <div class="vc-face vc-left"   onclick="snapView('left')">Left</div>
+    <div class="vc-face vc-top"    onclick="snapView('top')">Top</div>
+    <div class="vc-face vc-bottom" onclick="snapView('bottom')">Bot</div>
 
-    <!-- six clickable faces -->
-    <div class="vc-face vc-front"  onclick="snapView('front')">FRONT</div>
-    <div class="vc-face vc-back"   onclick="snapView('back')">BACK</div>
-    <div class="vc-face vc-right"  onclick="snapView('right')">RIGHT</div>
-    <div class="vc-face vc-left"   onclick="snapView('left')">LEFT</div>
-    <div class="vc-face vc-top"    onclick="snapView('top')">TOP</div>
-    <div class="vc-face vc-bottom" onclick="snapView('bottom')">BTM</div>
-
-    <!-- X axis: red, horizontal through cube center, arrow at +X tip -->
-    <div class="vc-axis vc-axis-x">
-      <div class="vc-axis-line"></div>
-      <div class="vc-axis-label">X</div>
+    <div id="vc-axes-root">
+      <div class="vc-axis x"></div>
+      <div class="vc-axis y"></div>
+      <div class="vc-axis z"></div>
     </div>
-
-    <!-- Y axis: green, front-back through cube center, arrow at +Y tip -->
-    <div class="vc-axis vc-axis-y">
-      <div class="vc-axis-line"></div>
-      <div class="vc-axis-label">Y</div>
-    </div>
-
-    <!-- Z axis: blue, top-bottom through cube center, arrow at +Z tip -->
-    <div class="vc-axis vc-axis-z">
-      <div class="vc-axis-line"></div>
-      <div class="vc-axis-label">Z</div>
-    </div>
-
   </div>
-  <div id="view-cube-axes"></div>
+  <div id="vc-label">Orbit</div>
 </div>
 
-<!-- Stats -->
-<div id="stats-panel">
-  Vertices: <span id="stat-verts">—</span><br>
-  Faces: <span id="stat-faces">—</span><br>
-  Render: <span id="stat-fps">—</span> fps
+<!-- ═══════════════════════════════════════════════════════════════════════════
+  CANVAS
+═══════════════════════════════════════════════════════════════════════════ -->
+<div id="canvas-wrap">
+  <canvas id="canvas"></canvas>
 </div>
 
-<!-- ═══════════════════════════════════════
-     FLIGHT DATABASE SIDEBAR
-════════════════════════════════════════ -->
+<!-- ═══════════════════════════════════════════════════════════════════════════
+  LOADING OVERLAY
+═══════════════════════════════════════════════════════════════════════════ -->
+<div id="overlay">
+  <div class="pulse-ring"><span class="drone-icon">🛸</span></div>
+  <div id="overlay-title">Awaiting Mesh</div>
+  <div id="overlay-sub">Polling /mnt/ssd/maps/latest.json</div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+  STATS BAR
+═══════════════════════════════════════════════════════════════════════════ -->
+<div id="stats-bar">
+  <div class="stat"><span class="stat-label">Verts</span><span class="stat-value" id="stat-verts">—</span></div>
+  <div class="stat"><span class="stat-label">Faces</span><span class="stat-value" id="stat-faces">—</span></div>
+  <div class="stat"><span class="stat-label">FPS</span><span class="stat-value" id="stat-fps">—</span></div>
+  <button id="dl-btn" disabled onclick="downloadCurrentPLY()">↓ Download PLY</button>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════
+  FLIGHT DATABASE SIDEBAR
+═══════════════════════════════════════════════════════════════════════════ -->
 <div id="sidebar">
   <div id="sidebar-header">
-    <div id="sidebar-title">&#9670; Flight Database</div>
-    <button id="sidebar-close" onclick="toggleSidebar()">&#10005;</button>
-  </div>
-
-  <div id="db-stats">
-    <div class="db-stat">
-      <div class="db-stat-label">Flights</div>
-      <div class="db-stat-val" id="db-total">—</div>
-    </div>
-    <div class="db-stat">
-      <div class="db-stat-label">Complete</div>
-      <div class="db-stat-val" id="db-complete" style="color:#4adf7a">—</div>
-    </div>
-    <div class="db-stat">
-      <div class="db-stat-label">SSD Used</div>
-      <div class="db-stat-val" id="db-size" style="font-size:13px;padding-top:4px">—</div>
+    <h2>Flight Database</h2>
+    <div id="db-stats">
+      <div class="ds-item"><span class="ds-val" id="db-total">—</span><span class="ds-lbl">Total</span></div>
+      <div class="ds-item"><span class="ds-val" id="db-complete">—</span><span class="ds-lbl">Complete</span></div>
+      <div class="ds-item"><span class="ds-val" id="db-size">—</span><span class="ds-lbl">Size</span></div>
     </div>
   </div>
-
-  <div id="db-search-wrap">
-    <input id="db-search" type="text" placeholder="Search flights…" oninput="filterFlights(this.value)" />
+  <div id="search-wrap">
+    <input id="search-input" type="text" placeholder="Search flights..." oninput="filterFlights(this.value)">
   </div>
-
   <div id="flight-list">
-    <div id="db-note">Connecting to Pi flight database…</div>
-  </div>
-
-  <div id="sidebar-footer">
-    <div id="sidebar-footer-title">Current mesh export</div>
-    <button id="dl-btn" onclick="downloadCurrentPLY()" disabled>
-      <span>&#8595;</span> Download current mesh (.ply)
-    </button>
+    <div id="db-note">Loading flight database...</div>
   </div>
 </div>
 
-<!-- Three.js r128 -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<!-- ═══════════════════════════════════════════════════════════════════════════
+  THREE.JS + VIEWER LOGIC
+═══════════════════════════════════════════════════════════════════════════ -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"
+  }
+}
+</script>
 
-<script>
-// ── config ────────────────────────────────────────────────────────────────────
-const POLL_INTERVAL_MS = 10000;
+<script type="module">
+import * as THREE from 'three';
+window.THREE = THREE;
 
+const POLL_INTERVAL_MS = 2000;
 const params   = new URLSearchParams(window.location.search);
 const BASE_URL = params.get('host')
   ? `http://${params.get('host')}`
@@ -692,12 +567,9 @@ const sun = new THREE.DirectionalLight(0xffffff, 0.8);
 sun.position.set(5, 10, 8);
 scene.add(sun);
 
-const grid = new THREE.GridHelper(20, 20, 0x1a2a3a, 0x121820);
-scene.add(grid);
+// Grid removed — scanned data has no semantic floor orientation
 
 // ── circular point sprite ─────────────────────────────────────────────────────
-// Renders points as soft circular discs instead of squares, matching RViz's
-// point cloud appearance. Built from a canvas — no external texture file needed.
 const _ptCanvas  = document.createElement('canvas');
 _ptCanvas.width  = 64;
 _ptCanvas.height = 64;
@@ -710,49 +582,158 @@ _ptCtx.fillStyle = _ptGrad;
 _ptCtx.fillRect(0, 0, 64, 64);
 const pointSprite = new THREE.CanvasTexture(_ptCanvas);
 
-// ── orbit controls ────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// TRACKBALL ORBIT CONTROLS (VIEW-RELATIVE ROTATION)
+// ══════════════════════════════════════════════════════════════════════════════
+// Uses quaternions for rotation accumulation. Drag directions are relative to
+// the current camera view, not fixed world axes. This matches the feel of
+// Blender, Fusion 360, and other 3D modeling software.
+//
+// - Horizontal drag: rotates around the screen's vertical axis
+// - Vertical drag: rotates around the screen's horizontal axis
+// - Both work intuitively regardless of current orientation
+// ══════════════════════════════════════════════════════════════════════════════
+
 let isDragging  = false;
 let isRightDrag = false;
 let lastX = 0, lastY = 0;
-let theta = 0, phi = Math.PI / 4, radius = 12;
-let panX = 0, panY = 0;
+
+// Orbit state: quaternion-based rotation + distance + pan offset
+let orbitQuat   = new THREE.Quaternion();  // accumulated rotation
+let orbitRadius = 12;                       // distance from target
+let orbitTarget = new THREE.Vector3(0, 0, 0); // pan offset / look-at point
+
+// Initial view: slightly above and in front
+const initEuler = new THREE.Euler(-Math.PI / 6, 0, 0, 'YXZ');
+orbitQuat.setFromEuler(initEuler);
 
 function updateCamera() {
-  const x = radius * Math.sin(phi) * Math.sin(theta) + panX;
-  const y = radius * Math.cos(phi) + panY;
-  const z = radius * Math.sin(phi) * Math.cos(theta);
-  camera.position.set(x, y, z);
-  // Flip camera.up when phi is in the lower hemisphere (PI to 2*PI).
-  // Without this, passing through the top or bottom pole inverts the
-  // horizontal drag direction -- the scene appears to flip control.
-  // Setting up to (0,-1,0) when upside down keeps controls consistent.
-  if (phi > Math.PI) {
-    camera.up.set(0, -1, 0);
-  } else {
-    camera.up.set(0,  1, 0);
-  }
-  camera.lookAt(panX, panY, 0);
+  // Camera position = target + (rotated forward vector * radius)
+  // Default forward is (0, 0, 1) in camera space; we rotate it by orbitQuat
+  const forward = new THREE.Vector3(0, 0, 1);
+  forward.applyQuaternion(orbitQuat);
+  
+  camera.position.copy(orbitTarget).addScaledVector(forward, orbitRadius);
+  camera.quaternion.copy(orbitQuat);
+  
   syncCube();
 }
 updateCamera();
 
-// ── view cube drag ───────────────────────────────────────────────────────────
-// Dragging on the cube orbits the scene, identical to dragging on the canvas.
-// A 3-pixel movement threshold distinguishes a drag from a face-snap click --
-// if the mouse moves less than 3px before mouseup, the click handler on the
-// face div fires normally. If it moves more, the drag is consumed here and
-// the click event is suppressed via a flag checked in snapView().
+// ── trackball rotation from mouse delta ─────────────────────────────────────
+function applyTrackballRotation(dx, dy) {
+  const sensitivity = 0.005;
+  
+  // Get camera's right and up vectors in world space
+  const right = new THREE.Vector3(1, 0, 0).applyQuaternion(orbitQuat);
+  const up    = new THREE.Vector3(0, 1, 0).applyQuaternion(orbitQuat);
+  
+  // Create rotation quaternions:
+  // - Horizontal drag (dx) rotates around the camera's UP vector
+  // - Vertical drag (dy) rotates around the camera's RIGHT vector
+  const rotY = new THREE.Quaternion().setFromAxisAngle(up, -dx * sensitivity);
+  const rotX = new THREE.Quaternion().setFromAxisAngle(right, -dy * sensitivity);
+  
+  // Apply rotations: first horizontal, then vertical
+  // Order: new rotation * existing rotation (premultiply)
+  orbitQuat.premultiply(rotY);
+  orbitQuat.premultiply(rotX);
+  orbitQuat.normalize();
+  
+  updateCamera();
+}
 
+// ── view cube sync ────────────────────────────────────────────────────────────
+// Syncs the CSS 3D view cube to match the camera's orientation.
+// 
+// Coordinate system differences:
+// - Three.js (WebGL): Right-handed, Y-up for camera, but we use Z-up for world
+// - CSS 3D: Y-down (screen coordinates), Z comes out of screen
+//
+// The cube shows the INVERSE of camera rotation (world-space feel) — if you
+// orbit right, the cube appears to rotate left, matching CAD software behavior.
+function syncCube() {
+  const cube = document.getElementById('view-cube');
+  if (!cube) return;
+  
+  // We need to convert from Three.js camera space to CSS 3D space.
+  // The camera quaternion represents how the camera is rotated.
+  // For the cube, we want to show the world's orientation as seen from camera.
+  
+  // Create a matrix that:
+  // 1. Applies the inverse camera rotation (world from camera's POV)
+  // 2. Converts from Three.js coords (Z-up) to CSS coords (Y-down, Z-out)
+  
+  const invQuat = orbitQuat.clone().invert();
+  
+  // Build rotation matrix from quaternion
+  const rotMat = new THREE.Matrix4().makeRotationFromQuaternion(invQuat);
+  
+  // Coordinate transform: Three.js Z-up → CSS Y-down
+  // In Three.js: X=right, Y=up (camera), Z=out
+  // In CSS 3D:   X=right, Y=down, Z=out
+  // So we need to flip Y, and our world Z-up maps to CSS -Y
+  const coordSwap = new THREE.Matrix4().set(
+    1,  0,  0,  0,   // X stays X
+    0,  0,  1,  0,   // CSS Y ← Three.js Z (up becomes down-ish)  
+    0, -1,  0,  0,   // CSS Z ← -Three.js Y
+    0,  0,  0,  1
+  );
+  
+  // Combined transformation
+  const finalMat = new THREE.Matrix4().multiplyMatrices(coordSwap, rotMat);
+  const e = finalMat.elements;
+  
+  // CSS matrix3d is column-major, same as Three.js Matrix4.elements
+  const cssMatrix = `matrix3d(${e[0]},${e[1]},${e[2]},${e[3]},${e[4]},${e[5]},${e[6]},${e[7]},${e[8]},${e[9]},${e[10]},${e[11]},${e[12]},${e[13]},${e[14]},${e[15]})`;
+  
+  cube.style.transform = cssMatrix;
+}
+
+// ── snap to preset view ───────────────────────────────────────────────────────
+// Animates quaternion to preset orientations over ~300ms
+const VIEW_PRESETS = {
+  front:  new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, 0, 'YXZ')),
+  back:   new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI, 0, 'YXZ')),
+  right:  new THREE.Quaternion().setFromEuler(new THREE.Euler(0, -Math.PI/2, 0, 'YXZ')),
+  left:   new THREE.Quaternion().setFromEuler(new THREE.Euler(0, Math.PI/2, 0, 'YXZ')),
+  top:    new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI/2, 0, 0, 'YXZ')),
+  bottom: new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI/2, 0, 0, 'YXZ')),
+};
+
+function snapView(preset) {
+  const target = VIEW_PRESETS[preset];
+  if (!target) return;
+  
+  const startQuat = orbitQuat.clone();
+  const startTime = performance.now();
+  const duration  = 300; // ms
+  
+  function animStep(now) {
+    const t = Math.min((now - startTime) / duration, 1);
+    // Smooth ease-in-out
+    const ease = t * t * (3 - 2 * t);
+    
+    // Spherical linear interpolation between quaternions
+    orbitQuat.slerpQuaternions(startQuat, target, ease);
+    updateCamera();
+    
+    if (t < 1) requestAnimationFrame(animStep);
+  }
+  requestAnimationFrame(animStep);
+}
+window.snapView = snapView;
+
+// ── view cube drag ───────────────────────────────────────────────────────────
 let cubeDragging    = false;
-let cubeDragMoved   = false;   // true once drag threshold exceeded
+let cubeDragMoved   = false;
 let cubeDragStartX  = 0;
 let cubeDragStartY  = 0;
-const CUBE_DRAG_THRESHOLD = 3;  // pixels
+const CUBE_DRAG_THRESHOLD = 3;
 
 const cubeWrap = document.getElementById('view-cube-wrap');
 
 cubeWrap.addEventListener('mousedown', e => {
-  // Only left button
   if (e.button !== 0) return;
   cubeDragging   = true;
   cubeDragMoved  = false;
@@ -760,7 +741,7 @@ cubeWrap.addEventListener('mousedown', e => {
   cubeDragStartY = e.clientY;
   lastX = e.clientX;
   lastY = e.clientY;
-  e.stopPropagation();   // prevent canvas mousedown firing simultaneously
+  e.stopPropagation();
 });
 
 window.addEventListener('mousemove', e => {
@@ -769,117 +750,32 @@ window.addEventListener('mousemove', e => {
   const dy = e.clientY - lastY;
   lastX = e.clientX;
   lastY = e.clientY;
-
-  // Check threshold before committing to drag mode
+  
   const totalMoved = Math.abs(e.clientX - cubeDragStartX)
                    + Math.abs(e.clientY - cubeDragStartY);
   if (!cubeDragMoved && totalMoved < CUBE_DRAG_THRESHOLD) return;
   cubeDragMoved = true;
-
-  // Same orbit logic as canvas drag -- full 360 vertical, no clamp.
-  // Negate theta when upside down to keep horizontal drag consistent.
-  const cubeUpsideDown = (phi > Math.PI);
-  theta -= dx * 0.005 * (cubeUpsideDown ? -1 : 1);
-  phi   -= dy * 0.005;
-  phi = ((phi % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
-  updateCamera();
+  
+  applyTrackballRotation(dx, dy);
 });
 
 window.addEventListener('mouseup', () => {
   cubeDragging = false;
 });
 
-// Suppress face snap click if the mouse was dragged
-const _origSnapView = snapView;
-// snapView is defined below -- wrap it after definition via flag check
-
 cubeWrap.addEventListener('click', e => {
-  // If a drag occurred, eat the click so face divs don't fire snapView
   if (cubeDragMoved) {
     e.stopPropagation();
     cubeDragMoved = false;
   }
-}, true);  // capture phase -- fires before the face onclick
+}, true);
 
-// ── view cube sync ────────────────────────────────────────────────────────────
-// Mirrors the current orbit (theta, phi) onto the CSS 3D cube so it always
-// shows the correct orientation. The cube uses the INVERSE of the camera
-// rotation -- if the camera orbits right, the cube appears to rotate left,
-// exactly as in Fusion 360 and other CAD tools.
-//
-// theta = azimuth angle (horizontal orbit, radians)
-// phi   = polar angle   (vertical orbit, radians, 0=top, PI=bottom)
-//
-// CSS rotateX/rotateY are applied in degrees to #view-cube's transform.
-// No WebGL draw calls involved -- pure DOM style update.
-function syncCube() {
-  const cube = document.getElementById('view-cube');
-  if (!cube) return;
-  // Convert orbit angles to cube rotation.
-  // Negate theta so cube rotates opposite to camera (world-space feel).
-  // phi offset: CSS X-rotation 0deg = front face forward; orbit phi=PI/2
-  // means camera is level, so subtract 90deg to align.
-  const rotX =  (phi   * 180 / Math.PI) - 90;
-  const rotY = -(theta * 180 / Math.PI);
-  cube.style.transform = `rotateX(${rotX}deg) rotateY(${rotY}deg)`;
-}
-
-// ── snap to preset view ───────────────────────────────────────────────────────
-// Animates theta and phi to preset values over ~300ms using requestAnimationFrame.
-// Preset angles are defined in radians matching the orbit coordinate system:
-//   theta = 0        -> looking along -Y axis (front face toward camera)
-//   phi   = PI/2     -> camera level (horizon)
-//   phi   = near 0   -> camera above looking down (top view)
-//
-// All presets keep the current radius and pan position so the subject stays
-// in frame. Only viewing angle changes.
-
-// Preset phi values are in [0, 2*PI) to match the wrapped orbit range.
-// phi = PI/2    -> camera level at the horizon
-// phi = 0.05    -> camera almost directly above (top view)
-// phi = PI+0.05 -> camera almost directly below (bottom view, upside-down)
-// Theta 0 = looking along -Y (front). PI/2 = right. -PI/2 = left. PI = back.
-const VIEW_PRESETS = {
-  //          theta              phi
-  front:  [ 0,                  Math.PI / 2          ],
-  back:   [ Math.PI,            Math.PI / 2          ],
-  right:  [ Math.PI / 2,        Math.PI / 2          ],
-  left:   [ -Math.PI / 2,       Math.PI / 2          ],
-  top:    [ 0,                  0.05                 ],
-  bottom: [ 0,                  Math.PI + 0.05       ],  // past PI -> upside down
-};
-
-function snapView(preset) {
-  const target = VIEW_PRESETS[preset];
-  if (!target) return;
-
-  const [targetTheta, targetPhi] = target;
-  const startTheta = theta;
-  const startPhi   = phi;
-  const startTime  = performance.now();
-  const duration   = 300;   // ms
-
-  // Shortest-path interpolation for theta (wrap around -PI/PI boundary)
-  let dTheta = targetTheta - startTheta;
-  while (dTheta >  Math.PI) dTheta -= 2 * Math.PI;
-  while (dTheta < -Math.PI) dTheta += 2 * Math.PI;
-
-  function animStep(now) {
-    const t = Math.min((now - startTime) / duration, 1);
-    // Smooth ease-in-out: t^2 * (3 - 2t)
-    const ease = t * t * (3 - 2 * t);
-    theta = startTheta + dTheta * ease;
-    phi   = startPhi   + (targetPhi - startPhi) * ease;
-    updateCamera();
-    if (t < 1) requestAnimationFrame(animStep);
-  }
-  requestAnimationFrame(animStep);
-}
-
+// ── canvas mouse controls ────────────────────────────────────────────────────
 canvas.addEventListener('mousedown', e => {
   isDragging  = true;
   isRightDrag = e.button === 2;
-  lastX = e.clientX; lastY = e.clientY;
+  lastX = e.clientX;
+  lastY = e.clientY;
 });
 window.addEventListener('mouseup', () => isDragging = false);
 canvas.addEventListener('contextmenu', e => e.preventDefault());
@@ -888,30 +784,69 @@ window.addEventListener('mousemove', e => {
   if (!isDragging) return;
   const dx = e.clientX - lastX;
   const dy = e.clientY - lastY;
-  lastX = e.clientX; lastY = e.clientY;
+  lastX = e.clientX;
+  lastY = e.clientY;
+  
   if (isRightDrag) {
-    panX -= dx * 0.01;
-    panY += dy * 0.01;
+    // Pan: move target in screen-relative directions
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(orbitQuat);
+    const up    = new THREE.Vector3(0, 1, 0).applyQuaternion(orbitQuat);
+    const panScale = orbitRadius * 0.002;
+    orbitTarget.addScaledVector(right, -dx * panScale);
+    orbitTarget.addScaledVector(up, dy * panScale);
+    updateCamera();
   } else {
-    // No phi clamp -- full 360 vertical orbit allowed.
-    // When the camera is in the upside-down hemisphere (phi > PI),
-    // camera.up is (0,-1,0) which flips the perceived left/right direction.
-    // Negating the theta delta when upside down keeps horizontal drag
-    // consistent -- dragging right always rotates right from the user's
-    // perspective regardless of which hemisphere the camera is in.
-    const upsideDown = (phi > Math.PI);
-    theta -= dx * 0.005 * (upsideDown ? -1 : 1);
-    phi   -= dy * 0.005;
-    // Wrap phi into [0, 2*PI) so the upside-down logic stays consistent
-    phi = ((phi % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+    // Trackball rotation
+    applyTrackballRotation(dx, dy);
   }
-  updateCamera();
 });
 
 canvas.addEventListener('wheel', e => {
-  radius = Math.max(0.5, Math.min(200, radius + e.deltaY * 0.02));
+  orbitRadius = Math.max(0.5, Math.min(200, orbitRadius + e.deltaY * 0.02));
   updateCamera();
 }, { passive: true });
+
+// ── touch controls ───────────────────────────────────────────────────────────
+let touchStartDist = 0;
+let touchStartRadius = 0;
+
+canvas.addEventListener('touchstart', e => {
+  if (e.touches.length === 1) {
+    isDragging = true;
+    isRightDrag = false;
+    lastX = e.touches[0].clientX;
+    lastY = e.touches[0].clientY;
+  } else if (e.touches.length === 2) {
+    // Pinch to zoom
+    const dx = e.touches[0].clientX - e.touches[1].clientX;
+    const dy = e.touches[0].clientY - e.touches[1].clientY;
+    touchStartDist = Math.sqrt(dx*dx + dy*dy);
+    touchStartRadius = orbitRadius;
+  }
+  e.preventDefault();
+}, { passive: false });
+
+canvas.addEventListener('touchmove', e => {
+  if (e.touches.length === 1 && isDragging) {
+    const dx = e.touches[0].clientX - lastX;
+    const dy = e.touches[0].clientY - lastY;
+    lastX = e.touches[0].clientX;
+    lastY = e.touches[0].clientY;
+    applyTrackballRotation(dx, dy);
+  } else if (e.touches.length === 2) {
+    const dx = e.touches[0].clientX - e.touches[1].clientX;
+    const dy = e.touches[0].clientY - e.touches[1].clientY;
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    const scale = touchStartDist / dist;
+    orbitRadius = Math.max(0.5, Math.min(200, touchStartRadius * scale));
+    updateCamera();
+  }
+  e.preventDefault();
+}, { passive: false });
+
+canvas.addEventListener('touchend', () => {
+  isDragging = false;
+});
 
 // ── resize handler ────────────────────────────────────────────────────────────
 function onResize() {
@@ -921,10 +856,10 @@ function onResize() {
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
 }
+window.onResize = onResize;
 window.addEventListener('resize', onResize);
 onResize();
 
-// Also resize when sidebar opens/closes
 const sidebarResizeObserver = new ResizeObserver(onResize);
 sidebarResizeObserver.observe(document.getElementById('canvas-wrap'));
 
@@ -945,9 +880,6 @@ animate();
 
 // ══════════════════════════════════════════════════════════════════════════════
 // VIRIDIS COLOR RAMP
-// Maps a normalised scalar t ∈ [0,1] → [R,G,B] ∈ [0,1] each.
-// Polynomial approximation of the matplotlib viridis LUT.
-// Used when no vertex color data is present in the PLY (camera offline).
 // ══════════════════════════════════════════════════════════════════════════════
 function viridis(t) {
   t = Math.max(0.0, Math.min(1.0, t));
@@ -960,9 +892,6 @@ function viridis(t) {
   return [r, g, b];
 }
 
-// Detect all-white vertex colors — pymeshlab Poisson reconstruction pads
-// geometry-only meshes with RGB (255,255,255). Sample up to 100 vertices;
-// if the mean of all channels is above 0.98 treat as no real color data.
 function isAllWhite(colors, nVerts) {
   const sampleSize = Math.min(100, nVerts);
   const step       = Math.max(1, Math.floor(nVerts / sampleSize));
@@ -974,8 +903,6 @@ function isAllWhite(colors, nVerts) {
   return (sum / count) > 0.98;
 }
 
-// Apply viridis height-ramp to geometry positions → colors Float32Array.
-// z is remapped from [zMin, zMax] → [0, 1] before lookup.
 function applyViridisHeightRamp(positions, nVerts) {
   let zMin =  Infinity, zMax = -Infinity;
   for (let i = 0; i < nVerts; i++) {
@@ -996,7 +923,9 @@ function applyViridisHeightRamp(positions, nVerts) {
   return colors;
 }
 
-// ── PLY parser ────────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════════════
+// PLY PARSER
+// ══════════════════════════════════════════════════════════════════════════════
 function plyTypeSize(type) {
   const sizes = { char:1, uchar:1, short:2, ushort:2, int:4, uint:4,
                   float:4, float32:4, double:8, float64:8 };
@@ -1022,185 +951,177 @@ function parsePLY(buffer) {
   const headerText  = new TextDecoder().decode(headerBytes);
   const lines       = headerText.split('\n');
 
+  let format = 'ascii';
   let nVerts = 0, nFaces = 0;
-  let isBinary = false, isBigEndian = false;
-  let headerEnd = 0;
-  let inVertex  = false;
-  let props     = [];
+  const vertexProps = [];
+  let inVertex = false, inFace = false;
+  let headerEndIdx = 0;
 
   for (let i = 0; i < lines.length; i++) {
-    const l = lines[i].trim();
-    if (l === 'format binary_little_endian 1.0') { isBinary = true; }
-    if (l === 'format binary_big_endian 1.0')    { isBinary = true; isBigEndian = true; }
-    if (l.startsWith('element vertex'))  { nVerts = parseInt(l.split(' ')[2]); inVertex = true; }
-    if (l.startsWith('element face'))    { nFaces = parseInt(l.split(' ')[2]); inVertex = false; }
-    if (l.startsWith('property') && inVertex && !l.startsWith('property list')) {
-      const parts = l.split(' ');
-      props.push({ name: parts[2], type: parts[1], size: plyTypeSize(parts[1]) });
-    }
-    if (l === 'end_header') {
-      const enc = new TextEncoder();
-      let off = 0;
-      for (let j = 0; j <= i; j++) off += enc.encode(lines[j] + '\n').length;
-      headerEnd = off;
+    const line = lines[i].trim();
+    headerEndIdx += lines[i].length + 1;
+    if (line.startsWith('format')) {
+      if (line.includes('binary_little')) format = 'binary_little';
+      else if (line.includes('binary_big')) format = 'binary_big';
+    } else if (line.startsWith('element vertex')) {
+      nVerts = parseInt(line.split(/\s+/)[2], 10);
+      inVertex = true; inFace = false;
+    } else if (line.startsWith('element face')) {
+      nFaces = parseInt(line.split(/\s+/)[2], 10);
+      inVertex = false; inFace = true;
+    } else if (line.startsWith('property') && inVertex) {
+      const parts = line.split(/\s+/);
+      vertexProps.push({ type: parts[1], name: parts[2] });
+    } else if (line === 'end_header') {
       break;
     }
   }
 
-  let byteOffset = 0;
-  for (const p of props) { p.offset = byteOffset; byteOffset += p.size; }
-  const stride = byteOffset;
-
-  const pMap     = Object.fromEntries(props.map(p => [p.name, p]));
-  const hasColor = 'red' in pMap;
-  const xProp    = pMap['x'], yProp = pMap['y'], zProp = pMap['z'];
-
   const positions = new Float32Array(nVerts * 3);
-  let colors      = hasColor ? new Float32Array(nVerts * 3) : null;
+  const colors    = new Float32Array(nVerts * 3);
+  let indices = null;
+  if (nFaces > 0) indices = new Uint32Array(nFaces * 3);
 
-  if (isBinary) {
-    const view = new DataView(buffer, headerEnd);
-    const le   = !isBigEndian;
+  const propIndex = {};
+  vertexProps.forEach((p, i) => propIndex[p.name] = i);
+
+  const hasColor = ('red' in propIndex) && ('green' in propIndex) && ('blue' in propIndex);
+
+  if (format === 'ascii') {
+    const bodyText = new TextDecoder().decode(new Uint8Array(buffer, headerEndIdx));
+    const dataLines = bodyText.trim().split('\n');
     for (let i = 0; i < nVerts; i++) {
-      const base = i * stride;
-      positions[i*3]   = plyTypeReader(view, xProp.type, base + xProp.offset, le);
-      positions[i*3+1] = plyTypeReader(view, yProp.type, base + yProp.offset, le);
-      positions[i*3+2] = plyTypeReader(view, zProp.type, base + zProp.offset, le);
-      if (hasColor && colors) {
-        colors[i*3]   = view.getUint8(base + pMap['red'].offset)   / 255;
-        colors[i*3+1] = view.getUint8(base + pMap['green'].offset) / 255;
-        colors[i*3+2] = view.getUint8(base + pMap['blue'].offset)  / 255;
+      const vals = dataLines[i].trim().split(/\s+/);
+      positions[i*3]   = parseFloat(vals[propIndex['x']]);
+      positions[i*3+1] = parseFloat(vals[propIndex['y']]);
+      positions[i*3+2] = parseFloat(vals[propIndex['z']]);
+      if (hasColor) {
+        colors[i*3]   = parseFloat(vals[propIndex['red']])   / 255;
+        colors[i*3+1] = parseFloat(vals[propIndex['green']]) / 255;
+        colors[i*3+2] = parseFloat(vals[propIndex['blue']])  / 255;
       }
     }
+    for (let i = 0; i < nFaces; i++) {
+      const vals = dataLines[nVerts + i].trim().split(/\s+/);
+      indices[i*3]   = parseInt(vals[1], 10);
+      indices[i*3+1] = parseInt(vals[2], 10);
+      indices[i*3+2] = parseInt(vals[3], 10);
+    }
   } else {
-    const bodyText  = new TextDecoder().decode(new Uint8Array(buffer, headerEnd));
-    const bodyLines = bodyText.split('\n');
-    const xIdx = props.findIndex(p => p.name === 'x');
-    const yIdx = props.findIndex(p => p.name === 'y');
-    const zIdx = props.findIndex(p => p.name === 'z');
-    const rIdx = props.findIndex(p => p.name === 'red');
-    const gIdx = props.findIndex(p => p.name === 'green');
-    const bIdx = props.findIndex(p => p.name === 'blue');
+    const le   = (format === 'binary_little');
+    const view = new DataView(buffer, headerEndIdx);
+    let vertexStride = 0;
+    vertexProps.forEach(p => vertexStride += plyTypeSize(p.type));
+
+    let propOffsets = [];
+    let off = 0;
+    for (const p of vertexProps) {
+      propOffsets.push(off);
+      off += plyTypeSize(p.type);
+    }
+
     for (let i = 0; i < nVerts; i++) {
-      const parts = bodyLines[i].trim().split(/\s+/);
-      positions[i*3]   = parseFloat(parts[xIdx]);
-      positions[i*3+1] = parseFloat(parts[yIdx]);
-      positions[i*3+2] = parseFloat(parts[zIdx]);
-      if (hasColor && colors && rIdx >= 0) {
-        colors[i*3]   = parseInt(parts[rIdx]) / 255;
-        colors[i*3+1] = parseInt(parts[gIdx]) / 255;
-        colors[i*3+2] = parseInt(parts[bIdx]) / 255;
+      const base = i * vertexStride;
+      positions[i*3]   = plyTypeReader(view, vertexProps[propIndex['x']].type, base + propOffsets[propIndex['x']], le);
+      positions[i*3+1] = plyTypeReader(view, vertexProps[propIndex['y']].type, base + propOffsets[propIndex['y']], le);
+      positions[i*3+2] = plyTypeReader(view, vertexProps[propIndex['z']].type, base + propOffsets[propIndex['z']], le);
+      if (hasColor) {
+        colors[i*3]   = plyTypeReader(view, vertexProps[propIndex['red']].type,   base + propOffsets[propIndex['red']],   le) / 255;
+        colors[i*3+1] = plyTypeReader(view, vertexProps[propIndex['green']].type, base + propOffsets[propIndex['green']], le) / 255;
+        colors[i*3+2] = plyTypeReader(view, vertexProps[propIndex['blue']].type,  base + propOffsets[propIndex['blue']],  le) / 255;
+      }
+    }
+
+    if (nFaces > 0) {
+      let faceOffset = nVerts * vertexStride;
+      for (let i = 0; i < nFaces; i++) {
+        const nv = view.getUint8(faceOffset); faceOffset += 1;
+        indices[i*3]   = view.getUint32(faceOffset, le); faceOffset += 4;
+        indices[i*3+1] = view.getUint32(faceOffset, le); faceOffset += 4;
+        indices[i*3+2] = view.getUint32(faceOffset, le); faceOffset += 4;
       }
     }
   }
 
-  return { positions, colors, nVerts, nFaces, hasColor };
+  return { positions, colors, indices, nVerts, nFaces, hasColor };
 }
 
-// ── mesh loader ───────────────────────────────────────────────────────────────
-let currentMesh   = null;
-let currentBuffer = null;   // retained for PLY download
+// ══════════════════════════════════════════════════════════════════════════════
+// MESH LOADING
+// ══════════════════════════════════════════════════════════════════════════════
+let currentMesh = null;
+let currentBuffer = null;
 
 async function loadMesh(filename) {
-  setStatus('loading', 'LOADING...');
-  setProgress(5);
-
-  const url = `${BASE_URL}/${filename}`;
-  let buffer;
-
+  if (!filename) return;
+  setStatus('loading', 'LOADING');
+  setProgress(10);
   try {
-    const resp = await fetch(url);
+    const resp = await fetch(`${BASE_URL}/${filename}`);
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-
-    const total  = parseInt(resp.headers.get('content-length') || '0');
-    const reader = resp.body.getReader();
-    const chunks = [];
-    let received = 0;
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-      received += value.length;
-      if (total > 0) setProgress(5 + 70 * (received / total));
-    }
-
-    const merged = new Uint8Array(received);
-    let offset = 0;
-    for (const chunk of chunks) { merged.set(chunk, offset); offset += chunk.length; }
-    buffer = merged.buffer;
-    currentBuffer = buffer;   // retain for download
+    setProgress(40);
+    currentBuffer = await resp.arrayBuffer();
+    setProgress(70);
+    displayMesh(currentBuffer);
   } catch (e) {
-    setStatus('error', 'LOAD ERROR');
-    console.error('PLY fetch failed:', e);
-    return;
+    setStatus('error', 'ERROR');
+    console.error('Failed to load mesh:', e);
   }
+}
+window.loadMesh = loadMesh;
 
-  setProgress(80);
-  const { positions, colors: plyColors, nVerts, nFaces, hasColor } = parsePLY(buffer);
-  setProgress(90);
-
-  // ── color decision ─────────────────────────────────────────────────────────
-  // If the PLY has real vertex colors (camera texture), use them directly.
-  // If not (camera offline / LiDAR-only), generate viridis height ramp.
-  let finalColors;
-  let colorSource;
-  if (hasColor && !isAllWhite(plyColors, nVerts)) {
-    finalColors = plyColors;
-    colorSource = 'CAMERA';
-  } else {
-    // Either no color properties, or all vertices are white (pymeshlab Poisson
-    // padding) — fall through to viridis height ramp either way.
-    finalColors = applyViridisHeightRamp(positions, nVerts);
-    colorSource = 'VIRIDIS·Z';
-  }
-  document.getElementById('color-mode-label').textContent = colorSource;
-
+function displayMesh(buffer) {
   if (currentMesh) { scene.remove(currentMesh); currentMesh.geometry.dispose(); }
-  grid.visible = false;
+
+  const { positions, colors, indices, nVerts, nFaces, hasColor } = parsePLY(buffer);
+
+  // Apply viridis height ramp if no color or all-white
+  let finalColors = colors;
+  if (!hasColor || isAllWhite(colors, nVerts)) {
+    finalColors = applyViridisHeightRamp(positions, nVerts);
+  }
 
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  geo.setAttribute('color',    new THREE.BufferAttribute(finalColors, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(finalColors, 3));
 
-  // ── point cloud vs mesh auto-detect ────────────────────────────────────────
-  // nFaces === 0 means the PLY has no face data (--no-mesh / cloud-only mode).
-  // Render as THREE.Points (like RViz point cloud display).
-  // nFaces > 0 means a full Poisson mesh — render as THREE.Mesh with lighting.
-  if (nFaces === 0) {
-    const mat = new THREE.PointsMaterial({
-      vertexColors: true,
-      size: 0.06,
-      sizeAttenuation: true,
-      map: pointSprite,
-      alphaTest: 0.05,
-      transparent: true,
-    });
-    currentMesh = new THREE.Points(geo, mat);
-    document.getElementById('stat-faces').textContent = 'points only';
-  } else {
+  if (indices && nFaces > 0) {
+    geo.setIndex(new THREE.BufferAttribute(indices, 1));
     geo.computeVertexNormals();
-    const mat = new THREE.MeshLambertMaterial({
+    const mat = new THREE.MeshStandardMaterial({
       vertexColors: true,
+      flatShading: false,
       side: THREE.DoubleSide,
     });
     currentMesh = new THREE.Mesh(geo, mat);
+  } else {
+    const mat = new THREE.PointsMaterial({
+      size: 0.03,
+      vertexColors: true,
+      sizeAttenuation: true,
+      map: pointSprite,
+      transparent: true,
+      alphaTest: 0.01,
+      depthWrite: false,
+    });
+    currentMesh = new THREE.Points(geo, mat);
   }
   scene.add(currentMesh);
 
-  // Auto-frame
+  // Auto-frame: reset orbit to frame the new mesh
   geo.computeBoundingSphere();
   const { center, radius: r } = geo.boundingSphere;
-  camera.position.set(center.x, center.y - r * 2.5, center.z + r * 1.2);
-  camera.lookAt(center);
-  panX = center.x; panY = center.y;
-  radius = r * 2.5;
+  
+  orbitTarget.copy(center);
+  orbitRadius = r * 2.5;
+  
+  // Reset to a nice initial view angle
+  orbitQuat.setFromEuler(new THREE.Euler(-Math.PI / 6, Math.PI / 8, 0, 'YXZ'));
   updateCamera();
 
   document.getElementById('stat-verts').textContent = nVerts.toLocaleString();
   document.getElementById('stat-faces').textContent = nFaces.toLocaleString();
 
-  // Enable download buttons
   document.getElementById('dl-btn').disabled        = false;
   document.getElementById('dl-header-btn').disabled = false;
 
@@ -1212,8 +1133,6 @@ async function loadMesh(filename) {
 
 // ══════════════════════════════════════════════════════════════════════════════
 // PLY DOWNLOAD
-// The buffer is already in memory from the fetch. We pass it directly
-// as a Blob — zero re-encoding, negligible CPU cost.
 // ══════════════════════════════════════════════════════════════════════════════
 function downloadCurrentPLY() {
   if (!currentBuffer) return;
@@ -1225,26 +1144,26 @@ function downloadCurrentPLY() {
   a.click();
   URL.revokeObjectURL(url);
 }
+window.downloadCurrentPLY = downloadCurrentPLY;
 
 // ── view mode state ───────────────────────────────────────────────────────────
-// Tracks the two PLY filenames from latest.json and which is active.
-let currentCloudFile = null;   // <session>_cloud.ply
-let currentMeshFile  = null;   // <session>_mesh.ply  (null if --no-mesh)
+let currentCloudFile = null;
+let currentMeshFile  = null;
 let activeViewMode   = 'cloud';
-let lastFilename     = null;   // tracks last loaded session for poll dedup
+let lastFilename     = null;
 
 function switchViewMode(mode) {
   if (mode === 'cloud' && !currentCloudFile) return;
   if (mode === 'mesh'  && !currentMeshFile)  return;
   activeViewMode = mode;
 
-  // Update button states
   document.getElementById('view-cloud-btn').classList.toggle('active', mode === 'cloud');
   document.getElementById('view-mesh-btn').classList.toggle('active',  mode === 'mesh');
 
   const file = mode === 'cloud' ? currentCloudFile : currentMeshFile;
   loadMesh(file);
 }
+window.switchViewMode = switchViewMode;
 
 // ── manifest poller ───────────────────────────────────────────────────────────
 async function pollManifest() {
@@ -1255,34 +1174,29 @@ async function pollManifest() {
     const data = await resp.json();
     const { cloud_ply, mesh_ply, filename, flight_name, timestamp, point_count } = data;
 
-    // Update header info
     document.getElementById('info-flight').textContent = flight_name || filename || '—';
     document.getElementById('info-points').textContent = point_count
       ? `${parseInt(point_count).toLocaleString()} pts` : '';
     document.getElementById('info-time').textContent   = timestamp || '';
 
-    // Resolve filenames — support both new dual-field and legacy single-field schema
     const cloudFile = cloud_ply || filename || null;
     const meshFile  = mesh_ply  || null;
 
-    const sessionKey = cloudFile;   // use cloud filename as session identity
+    const sessionKey = cloudFile;
 
     if (sessionKey && sessionKey !== lastFilename) {
       lastFilename     = sessionKey;
       currentCloudFile = cloudFile;
       currentMeshFile  = meshFile;
 
-      // Enable/disable toggle buttons based on what's available
       document.getElementById('view-cloud-btn').disabled = !cloudFile;
       document.getElementById('view-mesh-btn').disabled  = !meshFile;
 
-      // Style mesh button dimmed if unavailable
       document.getElementById('view-mesh-btn').style.opacity = meshFile ? '1' : '0.35';
       document.getElementById('view-mesh-btn').title = meshFile
         ? 'Switch to Poisson mesh view'
         : 'Mesh not available — run postprocess_mesh.py without --no-mesh';
 
-      // Default to cloud view on new session load
       activeViewMode = 'cloud';
       document.getElementById('view-cloud-btn').classList.add('active');
       document.getElementById('view-mesh-btn').classList.remove('active');
@@ -1307,28 +1221,6 @@ function setProgress(pct) {
 
 // ══════════════════════════════════════════════════════════════════════════════
 // FLIGHT DATABASE SIDEBAR
-// Polls GET /api/flights on the Pi backend.
-// Falls back gracefully if the endpoint does not exist yet — shows a clear
-// note rather than an error state.
-//
-// Expected /api/flights response schema:
-// {
-//   "flights": [
-//     {
-//       "id":         "FLT-2026-001",
-//       "timestamp":  "2026-03-16 09:14",
-//       "duration":   "08m 42s",
-//       "point_count": 142840,
-//       "status":     "complete",       // "complete" | "partial" | "failed"
-//       "files":      ["ply","bag"],    // any subset of ["ply","pcd","bag"]
-//       "size_mb":    684,
-//       "ply_file":   "flight_001.ply" // filename served under /mnt/ssd/maps/
-//     }
-//   ],
-//   "total_flights":  7,
-//   "complete_count": 5,
-//   "total_size_gb":  "4.8"
-// }
 // ══════════════════════════════════════════════════════════════════════════════
 let allFlights   = [];
 let sidebarOpen  = false;
@@ -1338,10 +1230,10 @@ function toggleSidebar() {
   document.getElementById('sidebar').classList.toggle('open', sidebarOpen);
   document.body.classList.toggle('sidebar-open', sidebarOpen);
   document.getElementById('flights-btn').classList.toggle('active', sidebarOpen);
-  // Trigger canvas resize after CSS transition completes
   setTimeout(onResize, 320);
   if (sidebarOpen && allFlights.length === 0) fetchFlightDB();
 }
+window.toggleSidebar = toggleSidebar;
 
 async function fetchFlightDB() {
   try {
@@ -1406,10 +1298,10 @@ function filterFlights(query) {
     (f.status     || '').toLowerCase().includes(q)
   ));
 }
+window.filterFlights = filterFlights;
 
 async function loadFromDB(plyFile, flightId) {
   lastFilename = plyFile;
-  // Update header info from DB record
   const f = allFlights.find(x => x.id === flightId);
   if (f) {
     document.getElementById('info-flight').textContent = f.id;
@@ -1418,11 +1310,11 @@ async function loadFromDB(plyFile, flightId) {
     document.getElementById('info-time').textContent   = f.timestamp || '';
   }
   await loadMesh(plyFile);
-  // Highlight current in list
   document.querySelectorAll('.flight-item').forEach(el => el.classList.remove('current'));
   const el = document.getElementById(`fi-${flightId}`);
   if (el) el.classList.add('current');
 }
+window.loadFromDB = loadFromDB;
 
 // ── boot ──────────────────────────────────────────────────────────────────────
 pollManifest();

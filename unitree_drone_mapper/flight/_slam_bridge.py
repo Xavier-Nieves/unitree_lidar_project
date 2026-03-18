@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SLAM odometry bridge: /Odometry (ENU) -> /fmu/in/vehicle_visual_odometry (NED).
+"""SLAM odometry bridge: /aft_mapped_to_init (ENU) -> /fmu/in/vehicle_visual_odometry (NED).
 
 Point-LIO outputs poses in ENU (East-North-Up, ROS standard).
 PX4 expects NED (North-East-Down).
@@ -14,9 +14,7 @@ Conversion:
 Quaternion ENU->NED: rotate by 90 deg around Z then flip Z.
 """
 
-import math
 import sys
-import os
 
 import rclpy
 from rclpy.node import Node
@@ -28,6 +26,7 @@ from rclpy.qos import (
 from nav_msgs.msg import Odometry as ROSOdometry
 from px4_msgs.msg import VehicleOdometry
 
+# QoS profiles defined inline -- no dependency on utils.ros_helpers
 SENSOR_QOS = QoSProfile(
     reliability=QoSReliabilityPolicy.BEST_EFFORT,
     durability=QoSDurabilityPolicy.VOLATILE,
@@ -70,16 +69,18 @@ class SLAMBridgeNode(Node):
             RELIABLE_QOS,
         )
 
+        # /aft_mapped_to_init is the correct pose topic published by the
+        # Point-LIO build on this system. /Odometry is never published.
         self.sub = self.create_subscription(
             ROSOdometry,
-            "/Odometry",
+            "/aft_mapped_to_init",
             self._callback,
             SENSOR_QOS,
         )
 
         self.msg_count = 0
         self.get_logger().info(
-            "SLAM bridge ready: /Odometry -> /fmu/in/vehicle_visual_odometry"
+            "SLAM bridge ready: /aft_mapped_to_init -> /fmu/in/vehicle_visual_odometry"
         )
 
     def _callback(self, msg: ROSOdometry):

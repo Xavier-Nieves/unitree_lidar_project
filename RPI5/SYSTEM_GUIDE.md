@@ -58,9 +58,6 @@ python3 view_insta360_live.py
 ```
 RPI5/
 ├── unitree_lidar_L1           ⭐ Main LiDAR control
-├── test_insta360.sh           📷 Test camera
-├── view_insta360_live.py      📹 Live camera viewer
-├── run_photogrammetry.sh      📸 Auto-capture images
 ├── verify_system.sh           ✅ System check
 ├── README.md                  📖 Quick reference
 └── SYSTEM_GUIDE.md            📚 This file
@@ -75,10 +72,6 @@ ros2_ws/                       # ROS2 workspace
 config/                        # Configuration files
 scripts/                       # Helper scripts
 _archive/                      # Old files (can be deleted)
-
-Output directories (created automatically):
-├── insta360_captures/         # Quick photos/videos
-└── photogrammetry_captures/   # Photogrammetry images
 ```
 
 ---
