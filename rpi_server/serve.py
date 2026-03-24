@@ -105,22 +105,48 @@ def _derive_status(files: list[str]) -> str:
     return 'failed'
 
 
-def _ply_filename_for_session(session_dir: str, session_id: str) -> str | None:
-    """
-    Return the PLY filename (basename only) for a session, or None.
-    Prefers a name matching the session ID; falls back to any .ply found.
-    """
+def _find_mesh_file(session_dir: str, session_id: str) -> str | None:
+    """Return the best mesh PLY filename for a session, or None."""
     try:
         plys = [f for f in os.listdir(session_dir) if f.lower().endswith('.ply')]
     except OSError:
         return None
-    if not plys:
-        return None
-    # Prefer exact match e.g. scan_20260317_091400.ply
+    # Priority order for mesh files
+    priority = ['mesh_final.ply', 'mesh_poisson.ply']
+    for name in priority:
+        if name in plys:
+            return name
+    # Fallback: any file with _mesh in name
     for p in plys:
-        if session_id in p:
+        if '_mesh' in p.lower() and 'debug' not in p.lower():
             return p
-    return plys[0]
+    return None
+
+
+def _find_cloud_file(session_dir: str, session_id: str) -> str | None:
+    """Return the best point cloud PLY filename for a session, or None."""
+    try:
+        plys = [f for f in os.listdir(session_dir) if f.lower().endswith('.ply')]
+    except OSError:
+        return None
+    # Priority order for cloud files
+    priority = ['combined_cloud.ply']
+    for name in priority:
+        if name in plys:
+            return name
+    # Fallback: any file with _cloud in name
+    for p in plys:
+        if '_cloud' in p.lower() and 'debug' not in p.lower():
+            return p
+    return None
+
+
+def _find_all_ply_files(session_dir: str) -> list[str]:
+    """Return all PLY filenames in a session directory."""
+    try:
+        return sorted([f for f in os.listdir(session_dir) if f.lower().endswith('.ply')])
+    except OSError:
+        return []
 
 
 def build_flight_list() -> dict:
@@ -172,12 +198,14 @@ def build_flight_list() -> dict:
         year, month, day, hour, minute, second = m.groups()
 
         # ── inferred fields ───────────────────────────────────────────────────
-        session_id = entry   # e.g. scan_20260317_091400
+        session_id = entry
         timestamp  = f"{year}-{month}-{day} {hour}:{minute}"
         files      = _detect_files(folder_path)
         status     = _derive_status(files)
         size_mb    = _folder_size_mb(folder_path)
-        ply_file   = _ply_filename_for_session(folder_path, session_id)
+        mesh_file  = _find_mesh_file(folder_path, session_id)
+        cloud_file = _find_cloud_file(folder_path, session_id)
+        all_plys   = _find_all_ply_files(folder_path)
 
         total_bytes += size_mb * 1024 * 1024
 
@@ -187,7 +215,15 @@ def build_flight_list() -> dict:
             "files":       files,
             "status":      status,
             "size_mb":     size_mb,
-            "ply_file":    ply_file,
+            # Filenames only (basename)
+            "mesh_file":   mesh_file,
+            "cloud_file":  cloud_file,
+            "all_plys":    all_plys,
+            # Full URL paths for browser to fetch via /rosbags/
+            "mesh_url":    f"rosbags/{session_id}/{mesh_file}" if mesh_file else None,
+            "cloud_url":   f"rosbags/{session_id}/{cloud_file}" if cloud_file else None,
+            # Legacy field — keep for backward compat
+            "ply_file":    f"rosbags/{session_id}/{mesh_file or cloud_file}" if (mesh_file or cloud_file) else None,
             # Fields populated by postprocess_mesh.py overlay (None until then)
             "point_count": None,
             "duration":    None,
@@ -250,8 +286,40 @@ class CORSHandler(SimpleHTTPRequestHandler):
         if self.path == "/api/flights":
             self._serve_flights()
             return
+        # ── /rosbags/<session>/<file.ply> — serve PLY files from rosbags dir ──
+        if self.path.startswith("/rosbags/"):
+            self._serve_rosbag_file()
+            return
         # All other requests: fall through to static file serving
         super().do_GET()
+
+    def _serve_rosbag_file(self):
+        """Serve a file from ROSBAG_DIR by path: /rosbags/<session>/<filename>"""
+        try:
+            # Strip leading /rosbags/
+            rel_path = self.path[len("/rosbags/"):]
+            # Security — prevent directory traversal
+            rel_path = rel_path.replace("..", "").lstrip("/")
+            full_path = os.path.join(ROSBAG_DIR, rel_path)
+
+            if not os.path.isfile(full_path):
+                self.send_response(404)
+                self.end_headers()
+                return
+
+            size = os.path.getsize(full_path)
+            self.send_response(200)
+            _, ext = os.path.splitext(full_path)
+            self.send_header("Content-Type", EXTRA_MIME.get(ext.lower(), "application/octet-stream"))
+            self.send_header("Content-Length", str(size))
+            self.end_headers()
+            with open(full_path, "rb") as f:
+                self.wfile.write(f.read())
+            logging.info(f"/rosbags/{rel_path} → {size} bytes")
+        except Exception as e:
+            logging.error(f"rosbag file serve error: {e}")
+            self.send_response(500)
+            self.end_headers()
 
     def _serve_flights(self):
         try:

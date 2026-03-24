@@ -1,7 +1,7 @@
 #!/bin/bash
 # ─────────────────────────────────────────────────────────────────────────────
 # setup_mesh_server_service.sh
-# Installs serve.py and meshview.html to /mnt/ssd/maps/ and registers
+# Installs serve.py and dronepi_viewer_ultimate.html to /mnt/ssd/maps/ and registers
 # the drone-mesh-server systemd service to auto-start on boot.
 #
 # Run once with sudo:
@@ -43,12 +43,12 @@ else
     exit 1
 fi
 
-# Copy meshview.html
-if [ -f "$SCRIPT_DIR/meshview.html" ]; then
-    cp "$SCRIPT_DIR/meshview.html" "$MAPS_DIR/meshview.html"
-    echo "  [OK] meshview.html copied"
+# Copy dronepi_viewer_ultimate.html (unified ground station)
+if [ -f "$SCRIPT_DIR/dronepi_viewer_ultimate.html" ]; then
+    cp "$SCRIPT_DIR/dronepi_viewer_ultimate.html" "$MAPS_DIR/dronepi_viewer_ultimate.html"
+    echo "  [OK] dronepi_viewer_ultimate.html copied"
 else
-    echo "  [FAIL] meshview.html not found at $SCRIPT_DIR/meshview.html"
+    echo "  [FAIL] dronepi_viewer_ultimate.html not found at $SCRIPT_DIR/dronepi_viewer_ultimate.html"
     exit 1
 fi
 
@@ -73,7 +73,7 @@ echo "[4/5] Creating systemd service..."
 cat > /etc/systemd/system/${SERVICE}.service << UNIT
 [Unit]
 Description=Drone Mesh HTTP Server (port 8080)
-Documentation=http://10.42.0.1:8080/meshview.html
+Documentation=http://10.42.0.1:8080/dronepi_viewer_ultimate.html
 # Wait for SSD to be mounted and hotspot to be up
 After=mnt-ssd.mount dronepi-hotspot.service
 Wants=mnt-ssd.mount dronepi-hotspot.service
@@ -120,7 +120,7 @@ echo "  Mesh server setup complete."
 echo "======================================================="
 echo ""
 echo "  Serving from : $MAPS_DIR"
-echo "  Viewer URL   : http://10.42.0.1:8080/meshview.html"
+echo "  Viewer URL   : http://10.42.0.1:8080/dronepi_viewer_ultimate.html"
 echo ""
 echo "  Service commands:"
 echo "    sudo systemctl status ${SERVICE}"
@@ -129,7 +129,7 @@ echo "    sudo journalctl -u ${SERVICE} -f"
 echo ""
 echo "  To test the viewer:"
 echo "    1. Connect laptop to dronepi-ap Wi-Fi"
-echo "    2. Open: http://10.42.0.1:8080/meshview.html"
-echo "    3. Viewer shows 'WAITING FOR OUTPUT'"
+echo "    2. Open: http://10.42.0.1:8080/dronepi_viewer_ultimate.html"
+echo "    3. Viewer shows 'WAITING FOR OUTPUT' on 3D tab"
 echo "    4. Copy a PLY + write latest.json to trigger auto-load"
 echo ""
