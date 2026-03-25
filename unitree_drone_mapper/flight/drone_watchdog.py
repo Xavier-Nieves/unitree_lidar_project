@@ -5,30 +5,32 @@ FEATURES
 --------
   1. AUTO MODE: armed + OFFBOARD → auto-start stack
   2. MANUAL MODE: RC momentary button → toggle stack on/off
-  3. BUZZER FEEDBACK: Pixhawk beeps on start/stop (no external hardware needed)
+  3. BUZZER FEEDBACK: Pixhawk beeps on start, stop, and button acknowledgement
 
-BUZZER TUNES
-------------
-  - Stack START: Rising tone (low → high) ♪♪♪
-  - Stack STOP:  Falling tone (high → low) ♪♪♪
-  - Button ACK:  Single short beep ♪
+BUZZER TUNES (QBASIC Format)
+----------------------------
+  - Stack START: Rising tone (ascending scale)
+  - Stack STOP:  Falling tone (descending scale)  
+  - Button ACK:  Single short beep
 
-The buzzer is the one built into your Pixhawk 6X. Tunes are sent via
-MAVROS using the PLAY_TUNE_V2 MAVLink message with MML (Music Macro Language).
+Uses QBASIC PLAY syntax (format=1), which is confirmed working on this firmware.
+MML_MODERN (format=2) does NOT work on this firmware.
 
-MML QUICK REFERENCE
--------------------
-  T<tempo>  - Set tempo (T120 = 120 BPM)
-  L<len>    - Default note length (L8 = eighth note)
-  O<oct>    - Octave (O4 = middle, O5 = high, O3 = low)
-  C D E F G A B - Notes
-  R         - Rest
-  < >       - Octave down/up
+QBASIC PLAY SYNTAX REFERENCE
+----------------------------
+  T<n>     Tempo (32-255), default 120
+  L<n>     Note length: 1=whole, 2=half, 4=quarter, 8=eighth, 16=sixteenth
+  O<n>     Octave (0-6), default 4
+  A-G      Notes (can add # or + for sharp, - for flat)
+  P<n>     Pause with length n
+  >        Octave up
+  <        Octave down
+  .        Dotted note (1.5x duration)
 
 RC CHANNEL CONFIGURATION
 ------------------------
-  1. Taranis: Assign momentary button (e.g., SH) to channel (e.g., CH7)
-  2. Script: Set RC_TOGGLE_CHANNEL to match (CH7 = index 6)
+  1. Taranis: Assign momentary button (e.g., SH) to channel (e.g., CH6)
+  2. Script: Set RC_TOGGLE_CHANNEL to match (CH6 = index 5)
   3. Verify in QGC Radio tab
 
 DEPLOYMENT
@@ -53,27 +55,27 @@ from mavros_msgs.msg import State, RCIn, PlayTuneV2
 
 # ── RC Toggle Configuration ───────────────────────────────────────────────────
 
-RC_TOGGLE_CHANNEL = 6      # 0-indexed: CH7=6, CH8=7
+RC_TOGGLE_CHANNEL = 5      # 0-indexed: CH6=5 (confirmed from your testing)
 RC_HIGH_THRESHOLD = 1700   # Button pressed above this
 RC_LOW_THRESHOLD = 1300    # Button released below this
 RC_DEBOUNCE_MS = 200       # Debounce time
 
-# ── Buzzer Tunes (MML Format) ─────────────────────────────────────────────────
+# ── Buzzer Tunes (QBASIC Format = 1) ──────────────────────────────────────────
 
-# MML_MODERN format (value 2) for PX4
-TUNE_FORMAT = 2  # MML_MODERN
+# IMPORTANT: Use format=1 (QBASIC), NOT format=2 (MML_MODERN)
+TUNE_FORMAT = 1  # QBASIC1_1
 
-# Rising tone: Stack starting (excited, ascending)
-TUNE_START = "T180 L16 O4 C E G > C"
+# Rising tone: Stack starting — ascending scale (C-E-G-C, fast and bright)
+TUNE_START = "T240L16O5CEGC"
 
-# Falling tone: Stack stopping (calming, descending) 
-TUNE_STOP = "T180 L16 O5 C < G E C"
+# Falling tone: Stack stopping — descending scale (C-G-E-C, resolving down)
+TUNE_STOP = "T240L16O5CG<EGC"
 
-# Single beep: Button acknowledged
-TUNE_ACK = "T200 L32 O5 C"
+# Single beep: Button acknowledged — short high note
+TUNE_ACK = "T200L32O6C"
 
-# Error beep: Something went wrong
-TUNE_ERROR = "T200 L16 O4 C R C R C"
+# Error beep: Three short staccato beeps
+TUNE_ERROR = "T200L16O5CPCPC"
 
 # ── General Configuration ─────────────────────────────────────────────────────
 
@@ -241,8 +243,8 @@ class MavrosReader:
         self._thread.start()
 
         log("MAVROS interface started")
-        log(f"  RC toggle: CH{RC_TOGGLE_CHANNEL + 1}")
-        log(f"  Buzzer feedback: {'ENABLED' if ENABLE_BUZZER else 'DISABLED'}")
+        log(f"  RC toggle: CH{RC_TOGGLE_CHANNEL + 1} (index {RC_TOGGLE_CHANNEL})")
+        log(f"  Buzzer: {'ENABLED (QBASIC format)' if ENABLE_BUZZER else 'DISABLED'}")
 
     def _state_cb(self, msg: State):
         with self._lock:
@@ -275,16 +277,16 @@ class MavrosReader:
     # ── Buzzer Control ────────────────────────────────────────────────────────
 
     def play_tune(self, tune: str):
-        """Play a tune on the Pixhawk buzzer using MML format."""
+        """Play a tune on the Pixhawk buzzer using QBASIC format."""
         if not ENABLE_BUZZER:
             return
 
         msg = PlayTuneV2()
-        msg.format = TUNE_FORMAT  # MML_MODERN = 2
+        msg.format = TUNE_FORMAT  # QBASIC1_1 = 1
         msg.tune = tune
 
         self._tune_pub.publish(msg)
-        log(f"  ♪ Buzzer: {tune[:20]}...")
+        log(f"  ♪ Buzzer: {tune}")
 
     def beep_start(self):
         """Rising tone indicating stack is starting."""
@@ -462,7 +464,8 @@ def wait_for_mavros(reader: MavrosReader):
     while time.time() < deadline:
         if reader.connected:
             log(f"FCU connected. Mode: {reader.mode}  Armed: {reader.armed}")
-            # Welcome beep
+            # Welcome beep — confirms buzzer is working
+            time.sleep(0.5)  # Brief delay for MAVROS to fully initialize
             reader.beep_ack()
             return
         time.sleep(1.0)
@@ -470,10 +473,10 @@ def wait_for_mavros(reader: MavrosReader):
 
 
 def main():
-    log("=" * 55)
+    log("=" * 60)
     log("DronePi Flight Stack Watchdog")
-    log("  RC Toggle + Buzzer Feedback")
-    log("=" * 55)
+    log("  RC Toggle + Buzzer Feedback (QBASIC format)")
+    log("=" * 60)
 
     if ENABLE_AUTO_MODE:
         mode_str = "armed + OFFBOARD" if REQUIRE_OFFBOARD else "armed"
@@ -483,9 +486,9 @@ def main():
         log(f"  MANUAL: CH{RC_TOGGLE_CHANNEL + 1} button → toggle")
 
     if ENABLE_BUZZER:
-        log("  BUZZER: Pixhawk beeps on start/stop")
+        log("  BUZZER: Pixhawk beeps (QBASIC format=1)")
 
-    log("=" * 55)
+    log("=" * 60)
 
     Path(ROSBAG_DIR).mkdir(parents=True, exist_ok=True)
 
@@ -524,7 +527,7 @@ def main():
                     stack.start("AUTO")
                     continue
 
-                # Status display
+                # Status display (every poll cycle)
                 ch_val = reader.get_rc_channel(RC_TOGGLE_CHANNEL) if ENABLE_RC_TOGGLE else 0
                 log_state("WAITING",
                           f"armed={reader.armed}  mode={reader.mode or '?'}  "
