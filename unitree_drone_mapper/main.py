@@ -77,8 +77,9 @@ LAUNCH_FILE = os.path.expanduser(
     "combined_lidar_mapping.launch.py"
 )
 
-BRIDGE_SCRIPT     = FLIGHT_DIR / "_slam_bridge.py"
-POSTFLIGHT_SCRIPT = UTILS_DIR  / "run_postflight.py"
+BRIDGE_SCRIPT      = FLIGHT_DIR / "_slam_bridge.py"
+COLLISION_SCRIPT   = FLIGHT_DIR / "collision_monitor.py"
+POSTFLIGHT_SCRIPT  = UTILS_DIR  / "run_postflight.py"
 LIDAR_PORT        = Path("/dev/ttyUSB0")
 MISSION_LOCK      = Path("/tmp/dronepi_mission.lock")
 ROSBAG_DIR        = Path("/mnt/ssd/rosbags")
@@ -95,10 +96,22 @@ POLL_HZ           = 2       # State machine poll rate
 SETPOINT_HZ       = 20      # OFFBOARD setpoint publish rate (PX4 requires > 2 Hz)
 POINTLIO_INIT_S   = 5       # Seconds to wait for Point-LIO initialisation
 BRIDGE_INIT_S     = 2       # Seconds to wait for SLAM bridge initialisation
+COLLISION_INIT_S  = 2       # Seconds to wait for collision monitor initialisation
 GRACEFUL_KILL_S   = 5       # Seconds before SIGKILL after SIGINT
 DEFAULT_FOV_DEG   = 70.0    # Diagonal camera FOV fallback (degrees)
 DEFAULT_MIN_DENS  = 5       # Minimum LiDAR points per grid cell before gap fill
 WP_TOLERANCE_M    = 0.5     # Waypoint arrival tolerance (metres)
+
+# Velocity scale factors applied by fly_to() based on collision zone status.
+# CAUTION reduces speed to give the drone time to react before Zone 2.
+# OBSTACLE reduces further — PX4's own CP_DIST hard stop is the final backstop.
+SPEED_SCALE_CLEAR    = 1.0   # Full waypoint speed
+SPEED_SCALE_CAUTION  = 0.5   # 50 % speed in outer caution ring (Zone 3)
+SPEED_SCALE_OBSTACLE = 0.2   # 20 % creep speed when inside Zone 2
+
+# NOTE on EKF2_GPS_MODE: This parameter may not appear in QGC's parameter tree.
+# Search for it directly in the QGC parameter search bar. If not found, your
+# firmware may predate it — EKF2_GPS_CTRL=1 provides sufficient GPS control alone.
 
 BAG_TOPICS = [
     "/cloud_registered",
@@ -107,6 +120,7 @@ BAG_TOPICS = [
     "/mavros/state",
     "/mavros/local_position/pose",
     "/mavros/global_position/global",
+    "/mavros/distance_sensor/lidar_down",   # AGL height from collision_monitor
 ]
 
 # ── Flight Modes ──────────────────────────────────────────────────────────────
@@ -233,12 +247,20 @@ class MainNode:
         self._pose      = None
         self._home      = None
         self._waypoints = []
+        self._collision_zone  = "CLEAR"
+        self.vision_pose_received = False   # Set True when SLAM bridge is publishing
 
         rclpy.init()
         self._node = Node("dronepi_main")
 
         sensor_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
+
+        RELIABLE_QOS = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST,
             depth=10,
         )
@@ -254,6 +276,19 @@ class MainNode:
         self._node.create_subscription(
             HomePosition, "/mavros/home_position/home",
             self._home_cb, sensor_qos)
+        self._node.create_subscription(
+            __import__("std_msgs").msg.String,
+            "/dronepi/collision_zone",
+            self._zone_cb,
+            RELIABLE_QOS,
+        )
+        # Monitor SLAM bridge output — used by preflight CHECK 7/7
+        self._node.create_subscription(
+            PoseStamped,
+            "/mavros/vision_pose/pose",
+            self._vision_cb,
+            RELIABLE_QOS,
+        )
 
         self._sp_pub = self._node.create_publisher(
             PoseStamped, "/mavros/setpoint_position/local", 10)
@@ -279,6 +314,13 @@ class MainNode:
     def _home_cb(self, msg):
         with self._lock: self._home = msg
 
+    def _zone_cb(self, msg):
+        with self._lock: self._collision_zone = msg.data
+
+    def _vision_cb(self, msg):
+        # Only needs to flip the flag once — just confirms bridge is publishing
+        with self._lock: self.vision_pose_received = True
+
     # ── State Properties ──────────────────────────────────────────────────────
 
     @property
@@ -292,6 +334,11 @@ class MainNode:
     @property
     def connected(self) -> bool:
         with self._lock: return self._state.connected
+
+    @property
+    def collision_zone(self) -> str:
+        """Current proximity zone: CLEAR | CAUTION | OBSTACLE."""
+        with self._lock: return self._collision_zone
 
     def get_pos(self) -> tuple:
         with self._lock:
@@ -335,19 +382,47 @@ class MainNode:
     ) -> bool:
         """Publish setpoints toward target until within WP_TOLERANCE_M or timeout.
 
+        Automatically scales the effective step rate based on the current
+        collision zone, giving the drone more time to react near obstacles:
+          CLEAR    → full SETPOINT_HZ rate
+          CAUTION  → SPEED_SCALE_CAUTION  (50 % of normal speed)
+          OBSTACLE → SPEED_SCALE_OBSTACLE (20 % creep — PX4 CP is backstop)
+
         Returns:
             True if target reached, False if timeout expired.
         """
         deadline = time.time() + timeout
         while time.time() < deadline:
-            self.publish_sp(ex, ey, ez, yaw)
+            # Choose speed scale from current collision zone
+            zone = self.collision_zone
+            if zone == "OBSTACLE":
+                scale = SPEED_SCALE_OBSTACLE
+            elif zone == "CAUTION":
+                scale = SPEED_SCALE_CAUTION
+            else:
+                scale = SPEED_SCALE_CLEAR
+
+            # Interpolate a partial setpoint toward the target at scaled speed
             cx, cy, cz = self.get_pos()
             dist = math.sqrt((cx - ex)**2 + (cy - ey)**2 + (cz - ez)**2)
-            print(f"\r    dist={dist:.2f}m", end="", flush=True)
+
             if dist < WP_TOLERANCE_M:
                 print()
                 return True
+
+            # Move toward target by scale fraction — keeps setpoint rate constant
+            # while effectively slowing approach speed
+            tx = cx + (ex - cx) * scale
+            ty = cy + (ey - cy) * scale
+            tz = cz + (ez - cz) * scale
+            self.publish_sp(tx, ty, tz, yaw)
+
+            print(
+                f"\r    dist={dist:.2f}m  zone={zone}  scale={scale:.0%}    ",
+                end="", flush=True,
+            )
             time.sleep(1.0 / SETPOINT_HZ)
+
         print()
         return False
 
@@ -403,6 +478,9 @@ def run_preflight_checks(node: MainNode) -> bool:
         all_pass = False
 
     # 2 — GPS lock and home position
+    # With SLAM as primary position source (EKF2_GPS_MODE=1, COM_ARM_WO_GPS=1),
+    # GPS is a fallback only. A missing fix is a warning, not a mission blocker.
+    # The drone will fly using SLAM; GPS will be fused when it acquires lock.
     log("[CHECK 2/6] Waiting for GPS home position...")
     deadline = time.time() + HOME_TIMEOUT
     while time.time() < deadline:
@@ -416,9 +494,8 @@ def run_preflight_checks(node: MainNode) -> bool:
             f"lon={h.geo.longitude:.6f}  "
             f"alt={h.geo.altitude:.1f}m")
     else:
-        log("[CHECK 2/6] FAIL — GPS not locked")
-        log("            Move to open sky and wait for fix")
-        all_pass = False
+        log("[CHECK 2/6] WARN — GPS not locked (SLAM is primary source, continuing)")
+        log("            RTL will use SLAM origin. Move to open sky for GPS fallback.")
 
     # 3 — EKF stability
     log("[CHECK 3/6] Waiting for EKF stability...")
@@ -465,7 +542,7 @@ def run_preflight_checks(node: MainNode) -> bool:
         all_pass = False
 
     # 6 — Mission waypoints from QGC
-    log("[CHECK 6/6] Waiting for mission waypoints...")
+    log("[CHECK 6/7] Waiting for mission waypoints...")
     deadline = time.time() + WP_TIMEOUT
     while time.time() < deadline:
         if node.get_nav_waypoints():
@@ -473,10 +550,28 @@ def run_preflight_checks(node: MainNode) -> bool:
         time.sleep(0.5)
     nav_wps = node.get_nav_waypoints()
     if nav_wps:
-        log(f"[CHECK 6/6] {len(nav_wps)} NAV_WAYPOINT(s) received from PX4")
+        log(f"[CHECK 6/7] {len(nav_wps)} NAV_WAYPOINT(s) received from PX4")
     else:
-        log("[CHECK 6/6] FAIL — No waypoints found")
+        log("[CHECK 6/7] FAIL — No waypoints found")
         log("            Upload a survey mission in QGC first")
+        all_pass = False
+
+    # 7 — SLAM bridge publishing (vision pose data arriving from Point-LIO)
+    # Checks /mavros/vision_pose/pose is updating — confirms Point-LIO and
+    # the SLAM bridge are both running and EKF2 has a vision source to fuse.
+    log("[CHECK 7/7] Waiting for SLAM vision pose data...")
+    slam_ok  = False
+    deadline = time.time() + 10.0
+    while time.time() < deadline:
+        if node.vision_pose_received:
+            slam_ok = True
+            break
+        time.sleep(0.2)
+    if slam_ok:
+        log("[CHECK 7/7] SLAM vision pose confirmed — Point-LIO publishing")
+    else:
+        log("[CHECK 7/7] FAIL — No vision pose data received")
+        log("            Check Point-LIO is running and _slam_bridge.py is active")
         all_pass = False
 
     log("=" * 50)
@@ -557,6 +652,17 @@ def handle_autonomous(node: MainNode) -> None:
     )
     time.sleep(BRIDGE_INIT_S)
 
+    collision_proc = None
+    if COLLISION_SCRIPT.exists():
+        collision_proc = start_proc(
+            "Collision monitor",
+            f"source {ROS_SETUP} && source {WS_SETUP} && "
+            f"python3 {COLLISION_SCRIPT}",
+        )
+        time.sleep(COLLISION_INIT_S)
+    else:
+        log("[WARN] collision_monitor.py not found — obstacle avoidance disabled")
+
     ts      = datetime.now().strftime("%Y%m%d_%H%M%S")
     bag_out = ROSBAG_DIR / f"scan_{ts}"
     bag_proc = start_proc(
@@ -573,9 +679,10 @@ def handle_autonomous(node: MainNode) -> None:
     if not nav_wps or home is None:
         log("[FAIL] No waypoints or home position — switching to AUTO.RTL")
         node.set_mode("AUTO.RTL")
-        stop_proc("Bag recorder", bag_proc)
-        stop_proc("SLAM bridge",  bridge_proc)
-        stop_proc("Point-LIO",    pointlio_proc)
+        stop_proc("Bag recorder",      bag_proc)
+        stop_proc("Collision monitor", collision_proc)
+        stop_proc("SLAM bridge",       bridge_proc)
+        stop_proc("Point-LIO",         pointlio_proc)
         return
 
     enu_wps = [
@@ -632,9 +739,10 @@ def handle_autonomous(node: MainNode) -> None:
                 node.set_mode("AUTO.RTL")
                 while node.armed:
                     time.sleep(0.5)
-                stop_proc("Bag recorder", bag_proc)
-                stop_proc("SLAM bridge",  bridge_proc)
-                stop_proc("Point-LIO",    pointlio_proc)
+                stop_proc("Bag recorder",      bag_proc)
+                stop_proc("Collision monitor", collision_proc)
+                stop_proc("SLAM bridge",       bridge_proc)
+                stop_proc("Point-LIO",         pointlio_proc)
                 return
             time.sleep(0.5)
 
@@ -677,9 +785,10 @@ def handle_autonomous(node: MainNode) -> None:
         time.sleep(0.5)
     log("Disarmed — watchdog will stop bag and run post-flight processing")
 
-    stop_proc("Bag recorder", bag_proc)
-    stop_proc("SLAM bridge",  bridge_proc)
-    stop_proc("Point-LIO",    pointlio_proc)
+    stop_proc("Bag recorder",      bag_proc)
+    stop_proc("Collision monitor", collision_proc)
+    stop_proc("SLAM bridge",       bridge_proc)
+    stop_proc("Point-LIO",         pointlio_proc)
 
 # ── Main State Machine ────────────────────────────────────────────────────────
 

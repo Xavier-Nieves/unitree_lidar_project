@@ -1,0 +1,12 @@
+/**:
+  ros__parameters:
+    plugin_denylist:
+      # common
+
+      # extras
+      - image_pub
+      - vibration
+      - wheel_odometry
+
+    # plugin_allowlist:
+    #   - 'sys_*'
