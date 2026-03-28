@@ -8,16 +8,16 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v3
 
-    - name: Setup ROS 2 Humble
-      uses: ros-tooling/setup-ros@v0.6
+    - name: Setup ROS 2 Jazzy
+      uses: ros-tooling/setup-ros@v0.7
       with:
-        required-ros-distributions: humble
+        required-ros-distributions: jazzy
 
     - name: Install dependencies
       run: |
@@ -39,13 +39,13 @@ jobs:
     - name: Build workspace
       run: |
         cd ws
-        source /opt/ros/humble/setup.bash
+        source /opt/ros/jazzy/setup.bash
         colcon build --symlink-install
 
     - name: Run tests
       run: |
         cd ws
-        source /opt/ros/humble/setup.bash
+        source /opt/ros/jazzy/setup.bash
         source install/setup.bash
         colcon test
 
