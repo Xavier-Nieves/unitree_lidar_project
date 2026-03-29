@@ -34,8 +34,8 @@ import sys
 import time
 
 # Add flight directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from flight_controller import FlightController
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'flight'))
+from flight.flight_controller import FlightController
 
 # ── Config ────────────────────────────────────────────────────────────────────
 

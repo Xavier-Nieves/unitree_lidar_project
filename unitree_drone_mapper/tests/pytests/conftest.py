@@ -1,9 +1,24 @@
 """Shared pytest fixtures for mesh_tools unit tests.
 
+sys.path is extended here so that 'mesh_tools' is importable regardless
+of which directory pytest is invoked from. pytest.ini sets testpaths to
+this directory, meaning pytest always runs from the project root
+(~/unitree_lidar_project), so we resolve utils/ relative to this file.
+
 These fixtures produce synthetic point clouds that work without
 any hardware, ROS, PDAL, or open3d.  All heavy-dep tests that
 need open3d are skipped automatically when the library is absent.
 """
+
+import sys
+from pathlib import Path
+
+# Add unitree_drone_mapper/utils/ to sys.path so test files can do:
+#   from mesh_tools.ground_classifier import GroundClassifier
+# without needing to know the working directory at invocation time.
+_UTILS_DIR = Path(__file__).resolve().parents[2] / "utils"
+if str(_UTILS_DIR) not in sys.path:
+    sys.path.insert(0, str(_UTILS_DIR))
 
 import numpy as np
 import pytest
