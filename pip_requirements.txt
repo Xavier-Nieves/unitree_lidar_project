@@ -1,0 +1,46 @@
+# DronePi Python requirements
+# For CI and laptop development (no conda, no hardware).
+# On the Pi use environment.yml instead — it includes open3d and pdal
+# from conda-forge which have no aarch64 pip wheels.
+#
+# Install: pip install -r requirements.txt
+#
+# ── ROS 2 / colcon ────────────────────────────────────────────────────────────
+# NOTE: empy MUST be pinned to 3.3.4
+# ROS 2 Jazzy uses the legacy `import em` API removed in empy 4.x.
+# Installing any newer version silently breaks colcon builds.
+empy==3.3.4
+catkin_pkg
+lark
+colcon-common-extensions
+colcon-ros
+osrf-pycommon
+
+# ── Point cloud / mesh (CI-safe, x86 pip wheels available) ───────────────────
+numpy>=1.26
+scipy>=1.12
+trimesh>=4.0
+pyyaml>=6.0
+psutil
+
+# ── Bag reading ───────────────────────────────────────────────────────────────
+rosbags
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+pytest>=8.0
+
+# ── NOT included here (no pip wheels for aarch64 / require conda-forge) ──────
+# open3d>=0.19   →  conda install -c conda-forge open3d
+# pdal>=3.5      →  conda install -c conda-forge pdal
+# pymeshlab      →  conda install -c conda-forge pymeshlab
+#
+# ── GitHub repos to clone (done by setup.sh, listed here for reference) ──────
+# Unitree L1 driver:  https://github.com/unitreerobotics/unilidar_sdk.git
+# Point-LIO ROS 2:    https://github.com/dfloreaa/point_lio_ros2.git
+#
+# ── System packages (apt, done by setup.sh) ───────────────────────────────────
+# ros-jazzy-mavros ros-jazzy-mavros-msgs ros-jazzy-mavros-extras
+# ros-jazzy-foxglove-bridge
+# ros-jazzy-pcl-ros ros-jazzy-pcl-conversions
+# ros-jazzy-tf2-ros ros-jazzy-tf2-geometry-msgs
+# ros-jazzy-visualization-msgs

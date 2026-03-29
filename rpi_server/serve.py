@@ -36,7 +36,7 @@ from http.server import SimpleHTTPRequestHandler, HTTPServer
 import sys as _sys
 
 _sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from pythonconfig.config_loader import load_config as _load_config
+from unitree_drone_mapper.config_loader import load_config as _load_config
 
 
 # ── config ────────────────────────────────────────────────────────────────────

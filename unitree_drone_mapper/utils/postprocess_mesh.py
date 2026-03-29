@@ -66,7 +66,7 @@ from debugger_tools import DebugSaver, PipelineStage, write_failure_status
 
 import sys as _sys
 _sys.path.insert(0, str(Path(__file__).parents[2]))
-from pythonconfig.config_loader import load_config as _load_config
+from unitree_drone_mapper.config_loader import load_config as _load_config
 
 # ── Config ────────────────────────────────────────────────────────────────────
 _cfg = _load_config()

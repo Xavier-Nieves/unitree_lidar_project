@@ -1,13 +1,14 @@
 # Autonomous Drone Mapping System — Configuration
-# All system parameters in one place
+# Single source of truth for all runtime constants.
+# Edit here; restart services to pick up changes.
 
-# System
+# ── System ────────────────────────────────────────────────────────────────────
 system:
   ros_distro: jazzy
   data_dir: ~/unitree_drone_mapper/data/flights
   log_level: INFO
 
-# Hardware
+# ── Hardware ──────────────────────────────────────────────────────────────────
 lidar:
   device: /dev/ttyUSB0
   model: unitree_l1
@@ -18,34 +19,42 @@ lidar:
   range_scale: 0.001
 
 imu:
-  source: lidar_internal  # L1 has built-in IMU
+  source: lidar_internal        # L1 has built-in IMU
 
 camera:
-  model: imx219                  # Raspberry Pi Camera Module v2 (Sony IMX219)
-  type: perspective              # Pinhole camera — NOT equirectangular
-  video_device: /dev/video0      # CSI camera via V4L2 (Pi 5 with libcamera-v4l2)
-  capture_interval_s: 10.0      # Seconds between texture captures
-  resolution: [1920, 1080]       # Capture resolution (set in test with --width/--height)
+  model: imx477                 # Arducam IMX477 (HQ camera)
+  type: perspective
+  video_device: /dev/video0
+  capture_interval_s: 10.0
+  resolution: [4056, 3040]
   jpeg_quality: 90
-  # Approximate intrinsics for IMX219 at 1920x1080 (calibrate for accuracy)
-  # Run: python3 -m utils.calibrate_camera to get exact values
-  fx: 1043.0
-  fy: 1043.0
-  cx: 960.0
-  cy: 540.0
+  fx: 2435.0
+  fy: 2435.0
+  cx: 2028.0
+  cy: 1520.0
 
 px4:
-  connection: /dev/ttyACM0      # USB serial — MAVLink only (no DDS for now)
-  baud: 921600
+  connection: /dev/ttyACM0
+  baud: 57600                   # matches mavros.service fcu_url baud
 
-# Flight
+# ── Flight ────────────────────────────────────────────────────────────────────
 flight:
   takeoff_altitude: 5.0
   cruise_speed: 2.0
-  collision_min_distance_m: 2.0
   rtl_battery_percent: 25
 
-# SLAM
+# ── Collision monitor (collision_monitor.py) ──────────────────────────────────
+collision:
+  ignore_radius:   0.70         # metres — drone legs + drift margin
+  obstacle_radius: 2.00         # metres — must match CP_DIST in QGC
+  caution_radius:  3.50         # metres — outer early-warning ring
+  down_cone_deg:   30.0         # half-angle of downward AGL extraction cone
+  down_fov_deg:    15.0         # beam spread reported to PX4 as field_of_view
+  down_max_m:      15.0         # max believable ground distance
+  down_min_points: 10           # min in-cone returns before publishing AGL
+  publish_hz:      10
+
+# ── SLAM ──────────────────────────────────────────────────────────────────────
 slam:
   point_lio_config: config/point_lio_params.yaml
   save_trajectory: true
@@ -56,23 +65,40 @@ slam:
   filter_size_surf: 0.1
   filter_size_map: 0.1
 
-# Mapping Pipeline
+# ── Mesh pipeline (postprocess_mesh.py) ───────────────────────────────────────
+mesh:
+  cloud_cap_rate:       1500
+  cloud_cap_max:        500000
+  cloud_cap_rate_fast:  800
+  cloud_cap_max_fast:   150000
+
+# ── HTTP server (rpi_server/serve.py) ─────────────────────────────────────────
+server:
+  port:      8080
+  bind_addr: "0.0.0.0"
+
+# ── Paths ─────────────────────────────────────────────────────────────────────
+paths:
+  maps_dir:    "/mnt/ssd/maps"
+  rosbags_dir: "/mnt/ssd/rosbags"
+
+# ── Mapping pipeline (legacy/future) ─────────────────────────────────────────
 mapping:
   cloud_cleaning:
     outlier_neighbors: 20
     outlier_std_ratio: 2.0
-    voxel_size: 0.02  # meters, 0 = no downsampling
+    voxel_size: 0.02
   meshing:
-    method: poisson
+    method: dtm_dsm             # dtm_dsm | poisson
     poisson_depth: 9
   texturing:
-    projection: spherical  # direct equirectangular projection
+    projection: spherical
     blend_overlapping: true
     max_images: 500
-  output_formats: [obj]
+  output_formats: [ply]
 
-# Calibration
+# ── Calibration ───────────────────────────────────────────────────────────────
 calibration:
   lidar_to_camera:
-    translation: [0.0, 0.0, 0.05]  # [x, y, z] meters
-    rotation: [0.0, 0.0, 0.0]      # [roll, pitch, yaw] radians
+    translation: [0.0, 0.0, 0.05]
+    rotation: [0.0, 0.0, 0.0]

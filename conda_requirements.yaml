@@ -1,0 +1,40 @@
+# Conda environment for DronePi on Raspberry Pi 5 (aarch64 / Ubuntu 24.04)
+# Create:  conda env create -f environment.yml
+# Update:  conda env update -f environment.yml --prune
+# Activate: conda activate dronepi
+
+name: dronepi
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.12
+  # Point cloud processing
+  - open3d>=0.19
+  - pdal>=3.5
+  # Scientific computing
+  - numpy
+  - scipy
+  - pyyaml
+  - psutil
+  # Pip packages (installed inside this conda env)
+  - pip
+  - pip:
+    # ROS 2 / colcon — empy MUST be 3.3.4 (Jazzy breaks with 4.x)
+    - empy==3.3.4
+    - catkin_pkg
+    - lark
+    - colcon-common-extensions
+    - colcon-ros
+    - rosdep
+    - osrf-pycommon
+    # Mesh and bag tools
+    - trimesh
+    - rosbags
+    - pymeshlab
+    # Hardware / comms
+    - websocket-client
+    - rpi-lgpio
+    # Testing
+    - pytest>=8.0

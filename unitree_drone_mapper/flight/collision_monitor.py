@@ -63,7 +63,7 @@ from rclpy.qos import (
 from pathlib import Path as _Path
 _sys.path.insert(0, str(_Path(__file__).parents[2]))
 
-from pythonconfig.config_loader import load_config as _load_config
+from unitree_drone_mapper.config_loader import load_config as _load_config
 
 
 from sensor_msgs.msg import PointCloud2, Range, LaserScan

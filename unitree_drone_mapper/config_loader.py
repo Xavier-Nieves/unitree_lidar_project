@@ -12,7 +12,7 @@ Falls back to built-in defaults if the YAML file is not found
 import os
 from pathlib import Path
 
-_CONFIG_PATH = Path(__file__).parent / "dronepi.yaml"
+_CONFIG_PATH = Path(__file__).parent / "config.yaml"
 
 _DEFAULTS = {
     "collision": {
