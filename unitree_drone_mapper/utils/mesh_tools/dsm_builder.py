@@ -35,14 +35,20 @@ import sys
 import threading
 import time
 import numpy as np
+from pathlib import Path
 
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).parents[2]))
+from unitree_drone_mapper.config_loader import load_config as _load_config
 
 # ── Performance limits ────────────────────────────────────────────────────────
 # BPA is O(n²) in practice. These caps keep runtime reasonable.
-DEFAULT_MAX_PTS      = 80_000   # Standard mode: ~30-60s on Pi 5
-DEFAULT_MAX_PTS_FAST = 50_000   # Fast mode: ~15-30s on laptop
-MIN_RADIUS           = 0.03    # Floor to prevent micro-radius from drift
-MAX_RADIUS           = 0.50    # Ceiling to prevent mega-radius from drift
+_cfg = _load_config()
+
+DEFAULT_MAX_PTS      = _cfg["dsm"]["DEFAULT_MAX_PTS"]   # Standard mode: ~30-60s on Pi 5
+DEFAULT_MAX_PTS_FAST = _cfg["dsm"]["DEFAULT_MAX_PTS_FAST"]   # Fast mode: ~15-30s on laptop
+MIN_RADIUS           = _cfg["dsm"]["MIN_RADIUS"]    # Floor to prevent micro-radius from drift
+MAX_RADIUS           = _cfg["dsm"]["MAX_RADIUS"]    # Ceiling to prevent mega-radius from drift
 
 
 # ── BPA progress spinner ─────────────────────────────────────────────────────
