@@ -1,0 +1,52 @@
+[Unit]
+Description=Point-LIO SLAM Standby — pre-arm map initialisation
+# Start only after the LiDAR USB device has been enumerated by udev.
+# This ensures /dev/ttyUSB0 exists and the device has settled before
+# Point-LIO attempts to open the serial port.
+BindsTo=dev-ttyUSB0.device
+After=dev-ttyUSB0.device
+
+# Also wait for MAVROS so the SLAM bridge can begin publishing vision
+# pose to EKF2 from the moment Point-LIO has a map.
+After=mavros.service
+Wants=mavros.service
+
+[Service]
+Type=simple
+User=dronepi
+
+# 3-second delay after USB enumeration — lets the Unitree L1 firmware
+# complete its startup sequence before Point-LIO opens the serial port.
+# Without this, Point-LIO may fail on the first open() and exit immediately.
+ExecStartPre=/bin/sleep 3
+
+ExecStart=/bin/bash -c "\
+    source /opt/ros/jazzy/setup.bash && \
+    source /home/dronepi/unitree_lidar_project/RPI5/ros2_ws/install/setup.bash && \
+    ros2 launch \
+    /home/dronepi/unitree_lidar_project/RPI5/ros2_ws/src/point_lio_ros2/launch/combined_lidar_mapping.launch.py \
+    rviz:=false port:=/dev/ttyUSB0"
+
+# Stop the service if the LiDAR USB device is removed.
+# This prevents Point-LIO from spinning with no sensor input
+# and ensures a clean restart when the LiDAR is reconnected.
+StopWhenUnneeded=yes
+
+# Restart on failure (e.g. serial port error) but not on clean stop.
+# RestartSec gives the LiDAR firmware time to recover between attempts.
+Restart=on-failure
+RestartSec=5
+
+# Allow Point-LIO up to 15 seconds to shut down cleanly on stop.
+# Point-LIO flushes its map and closes the serial port on SIGINT.
+# SIGKILL is sent after this timeout if it has not exited.
+TimeoutStopSec=15
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pointlio-standby
+
+[Install]
+# Start when the LiDAR USB device appears — not at boot.
+# Plug in the LiDAR → service starts. Unplug → service stops.
+WantedBy=dev-ttyUSB0.device

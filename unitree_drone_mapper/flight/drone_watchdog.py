@@ -54,6 +54,13 @@ from watchdog_core.mavros_reader  import MavrosReader
 from watchdog_core.flight_stack   import FlightStack, ROSBAG_DIR
 from watchdog_core.postflight     import PostflightMonitor
 
+# LED controller — imported from watchdog_core alongside this file
+try:
+    from watchdog_core.led_controller import LEDController, LEDState
+    _LED_AVAILABLE = True
+except Exception:
+    _LED_AVAILABLE = False
+
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 from watchdog_core.mavros_reader import RC_TOGGLE_CHANNEL, ENABLE_BUZZER
@@ -64,6 +71,16 @@ MONITOR_HZ       = 10
 MAVROS_WAIT_S    = 15
 
 MISSION_LOCK = Path("/tmp/dronepi_mission.lock")
+HAILO_LOCK   = Path("/tmp/dronepi_hailo.lock")
+
+# SLAM chain verification — mirrors main.py constants
+# Watchdog uses these when it owns the stack (MODE 2 / manual_scan)
+ROS_SETUP  = "/opt/ros/jazzy/setup.bash"
+WS_SETUP   = str(Path.home() / "unitree_lidar_project/RPI5/ros2_ws/install/setup.bash")
+SLAM_MIN_HZ           = 5.0
+BRIDGE_MIN_HZ         = 8.0
+SLAM_TOPIC_TIMEOUT_S  = 30.0
+BRIDGE_TOPIC_TIMEOUT_S = 15.0
 
 
 # ── Lock File ─────────────────────────────────────────────────────────────────
@@ -105,14 +122,25 @@ def main() -> None:
 
     ROSBAG_DIR.mkdir(parents=True, exist_ok=True)
 
+    # ── LED controller ────────────────────────────────────────────────────────
+    led = LEDController() if _LED_AVAILABLE else None
+    if led:
+        led.set_state(LEDState.WAITING_FCU)
+
     # ── Initialise components ─────────────────────────────────────────────────
     try:
         reader = MavrosReader()
     except Exception as exc:
         log(f"[FAIL] ROS 2 init failed: {exc}")
+        if led:
+            led.set_state(LEDState.ERROR)
+            led.cleanup()
         sys.exit(1)
 
     _wait_for_mavros(reader)
+
+    if reader.connected and led:
+        led.set_state(LEDState.IDLE)
 
     postflight = PostflightMonitor(reader)
     stack      = FlightStack(reader, postflight_fn=postflight.trigger)
@@ -123,13 +151,12 @@ def main() -> None:
             lock_mode = read_lock_mode()
 
             # ── BENCH TEST — test script owns the stack ───────────────────────
-            # Written by test_manual_scan.py --no-disarm-stop.
-            # Watchdog yields entirely so the test script can manage
-            # Point-LIO and the bag recorder without a port conflict.
             if lock_mode == "bench_scan":
                 if stack.is_running:
                     log("Lock mode switched to bench_scan — stopping watchdog stack")
                     stack.stop()
+                    if led:
+                        led.set_state(LEDState.IDLE)
                 log("[WATCHDOG] bench_scan lock active — yielding to test script")
                 time.sleep(1.0 / POLL_HZ)
                 continue
@@ -139,6 +166,8 @@ def main() -> None:
                 if stack.is_running:
                     log("Lock mode switched to autonomous — stopping watchdog stack")
                     stack.stop()
+                    if led:
+                        led.set_state(LEDState.IDLE)
                 log("[WATCHDOG] autonomous lock active — yielding to main.py")
                 time.sleep(1.0 / POLL_HZ)
                 continue
@@ -147,7 +176,17 @@ def main() -> None:
             if lock_mode == "manual_scan":
                 if not stack.is_running:
                     log("[WATCHDOG] manual_scan lock detected — starting stack")
-                    stack.start("MANUAL_LOCK")
+                    ok = stack.start("MANUAL_LOCK")
+                    if not ok:
+                        log("[WATCHDOG] Stack startup failed — clearing lock, returning to IDLE")
+                        if MISSION_LOCK.exists():
+                            MISSION_LOCK.unlink()
+                        if led:
+                            led.set_state(LEDState.ERROR)
+                        time.sleep(1.0 / POLL_HZ)
+                        continue
+                    if led:
+                        led.set_state(LEDState.SCANNING)
 
                 stack.check_health()
 
@@ -155,6 +194,8 @@ def main() -> None:
                 if not reader.armed:
                     log("[WATCHDOG] Disarmed — stopping stack")
                     stack.stop()
+                    if led:
+                        led.set_state(LEDState.PROCESSING)
                     if MISSION_LOCK.exists():
                         MISSION_LOCK.unlink()
                         log("Lock cleared")
@@ -167,7 +208,11 @@ def main() -> None:
                 if ENABLE_RC_TOGGLE and reader.check_toggle_pressed():
                     log("RC button pressed — starting stack")
                     reader.beep_ack()
-                    stack.start("MANUAL_RC")
+                    ok = stack.start("MANUAL_RC")
+                    if ok and led:
+                        led.set_state(LEDState.SCANNING)
+                    elif not ok and led:
+                        led.set_state(LEDState.ERROR)
                 else:
                     ch_val = reader.get_rc_channel(RC_TOGGLE_CHANNEL)
                     log(
@@ -182,6 +227,8 @@ def main() -> None:
                     log("RC button pressed — stopping stack")
                     reader.beep_ack()
                     stack.stop()
+                    if led:
+                        led.set_state(LEDState.PROCESSING)
                 else:
                     time.sleep(1.0 / MONITOR_HZ)
 
@@ -191,6 +238,9 @@ def main() -> None:
         if stack.is_running:
             stack.stop()
         reader.shutdown()
+        if led:
+            led.set_state(LEDState.OFF)
+            led.cleanup()
         log("Watchdog stopped.")
 
 

@@ -62,11 +62,9 @@ else
     echo "       Bit ref: 0x1=under-voltage now  0x4=throttled now  0x10000=under-voltage occurred"
 fi
 
-# Read voltage — strip everything except the numeric value
 V5_RAW=$(vcgencmd pmic_read_adc EXT5V_V 2>/dev/null)
 V5=$(echo "$V5_RAW" | grep -oP '[0-9]+\.[0-9]+' | head -1)
 if [ -n "$V5" ]; then
-    # Pure numeric awk comparison — no unit suffix passed in
     VCHECK=$(awk -v v="$V5" 'BEGIN{ print (v+0 >= 4.8) ? "ok" : "low" }')
     if [ "$VCHECK" = "ok" ]; then
         pass "5V rail voltage: ${V5}V (above 4.8V threshold)"
@@ -196,7 +194,6 @@ else
     echo "       Check: lsmod | grep hailo"
 fi
 
-# Resolve venv under real user home, not root home
 HAILO_VENV="$REAL_HOME/hailo_inference_env"
 if [ -d "$HAILO_VENV" ]; then
     pass "hailo_inference_env venv found at $HAILO_VENV"
@@ -216,53 +213,196 @@ fi
 # ============================================================
 section "5. CAMERA — Raspberry Pi HQ IMX477"
 # ============================================================
+#
+# Detection strategy (in priority order):
+#   A. libcamera / rpicam-hello  — primary tool, reports sensor model directly
+#   B. media-ctl                 — kernel media graph; confirms CSI pipeline
+#   C. v4l2-ctl                  — lists V4L2 nodes; confirms unicam/rp1 driver
+#   D. /sys filesystem           — reads i2c device name without any binary
+#
+# The IMX477 enumerates via the CSI2 / i2c bus as i2c@88000/imx477@1a on RPi5.
+# The rpicam-hello output you observed confirms the full path:
+#   /base/axi/pcie@120000/rp1/i2c@88000/imx477@1a
+# All checks below anchor to this known path or sensor name.
+# ============================================================
 
-CAM_OK=false
+CAM_PASS=0    # counts passing sub-checks in this section
+CAM_FAIL=0    # counts failing sub-checks in this section
 
-# Try libcamera (may need full path on Ubuntu 24.04)
-for BIN in libcamera-hello /usr/bin/libcamera-hello /usr/local/bin/libcamera-hello; do
-    if command -v "$BIN" > /dev/null 2>&1 || [ -x "$BIN" ]; then
-        CAM_DETECT=$("$BIN" --list-cameras 2>&1)
-        if echo "$CAM_DETECT" | grep -qi "imx477"; then
-            pass "IMX477 HQ Camera detected via libcamera"
-            echo "       $(echo "$CAM_DETECT" | grep -i 'imx477' | head -1 | xargs)"
-            CAM_OK=true
-        elif echo "$CAM_DETECT" | grep -qi "available\|camera"; then
-            warn "Camera found by libcamera but model not confirmed as IMX477"
-            echo "       Output: $(echo "$CAM_DETECT" | head -2 | xargs)"
-            CAM_OK=true
-        fi
+# ── A. libcamera / rpicam-hello ───────────────────────────────────────────────
+# rpicam-hello --list-cameras exits 0 and prints sensor names when the ISP
+# pipeline is healthy.  We search for "imx477" in the output.
+# Try both /usr/local/bin (from the build you installed) and system path.
+
+CAM_DETECTED=false
+RPICAM_BIN=""
+
+for BIN in \
+    /usr/local/bin/rpicam-hello \
+    /usr/bin/rpicam-hello \
+    /usr/local/bin/libcamera-hello \
+    /usr/bin/libcamera-hello; do
+    if [ -x "$BIN" ]; then
+        RPICAM_BIN="$BIN"
         break
     fi
 done
 
-# v4l2 fallback
-if [ "$CAM_OK" = false ]; then
-    if v4l2-ctl --list-devices 2>/dev/null | grep -qi "unicam\|imx477\|camera\|rp1"; then
-        pass "Camera detected via v4l2"
-        CAM_OK=true
+if [ -n "$RPICAM_BIN" ]; then
+    # --list-cameras: enumerates available cameras without opening a preview
+    # --timeout 0: exit immediately after enumeration (no preview window)
+    CAM_OUTPUT=$("$RPICAM_BIN" --list-cameras 2>&1)
+    CAM_EXIT=$?
+
+    if echo "$CAM_OUTPUT" | grep -qi "imx477"; then
+        CAM_LINE=$(echo "$CAM_OUTPUT" | grep -i "imx477" | head -1 | xargs)
+        pass "IMX477 confirmed by $( basename "$RPICAM_BIN" ): $CAM_LINE"
+        CAM_DETECTED=true
+        ((CAM_PASS++))
+    elif echo "$CAM_OUTPUT" | grep -qiE "available cameras|camera [0-9]"; then
+        warn "$( basename "$RPICAM_BIN" ) found a camera but could not confirm IMX477 model"
+        echo "       Output: $(echo "$CAM_OUTPUT" | head -3 | xargs)"
+        CAM_DETECTED=true
+        ((CAM_PASS++))
+    else
+        fail "IMX477 NOT detected by $( basename "$RPICAM_BIN" ) (exit=$CAM_EXIT)"
+        echo "       Output: $(echo "$CAM_OUTPUT" | head -3 | xargs)"
+        echo "       Check CSI ribbon cable seating and lock tabs at both ends"
+        ((CAM_FAIL++))
+    fi
+else
+    warn "rpicam-hello / libcamera-hello not found in PATH or /usr/local/bin"
+    echo "       Install: build rpicam-apps and run the find-based copy command"
+    echo "       sudo find ~/rpicam-apps/build/apps -type f -executable -name 'rpicam-*'"
+    echo "            -exec cp {} /usr/local/bin/ \\;"
+fi
+
+# ── B. media-ctl — kernel media graph ────────────────────────────────────────
+# The RPi5 CSI pipeline registers a media device.  media-ctl -p lists all
+# entities; imx477 appears as a subdev entity when the driver is loaded and
+# the sensor is reachable.
+
+if command -v media-ctl > /dev/null 2>&1; then
+    MEDIA_OUT=$(media-ctl -p 2>/dev/null)
+    if echo "$MEDIA_OUT" | grep -qi "imx477"; then
+        MEDIA_ENTITY=$(echo "$MEDIA_OUT" | grep -i "imx477" | head -1 | xargs)
+        pass "IMX477 entity in kernel media graph: $MEDIA_ENTITY"
+        ((CAM_PASS++))
+    else
+        # media-ctl is present but IMX477 not in graph — could be a driver issue
+        warn "media-ctl available but IMX477 not found in media graph"
+        echo "       Check: media-ctl -p | grep -i imx477"
+        ((CAM_FAIL++))
+    fi
+else
+    warn "media-ctl not installed — skipping media graph check"
+    echo "       Install: sudo apt install v4l-utils"
+fi
+
+# ── C. v4l2-ctl — V4L2 device enumeration ────────────────────────────────────
+# unicam (RPi CSI receiver) and rp1-cfe register V4L2 nodes for the sensor.
+# The device name contains "unicam", "rp1", or the sensor model.
+
+if command -v v4l2-ctl > /dev/null 2>&1; then
+    V4L2_OUT=$(v4l2-ctl --list-devices 2>/dev/null)
+    if echo "$V4L2_OUT" | grep -qiE "unicam|imx477|rp1|cfe"; then
+        V4L2_LINE=$(echo "$V4L2_OUT" | grep -iE "unicam|imx477|rp1|cfe" | head -1 | xargs)
+        pass "CSI capture device via v4l2: $V4L2_LINE"
+        ((CAM_PASS++))
+    else
+        warn "v4l2-ctl found no CSI capture device (unicam/rp1/imx477)"
+        echo "       Full list: v4l2-ctl --list-devices"
+        ((CAM_FAIL++))
+    fi
+else
+    warn "v4l2-ctl not installed — skipping V4L2 device check"
+    echo "       Install: sudo apt install v4l-utils"
+fi
+
+# ── D. /sys filesystem — i2c device node ─────────────────────────────────────
+# The IMX477 driver registers under /sys/bus/i2c/devices/ as:
+#   /sys/bus/i2c/devices/<bus>-001a/   (i2c address 0x1a)
+# The driver name file at <device>/name contains "imx477".
+# This check requires no binary and works even if libcamera is absent.
+
+SYS_IMX477=$(find /sys/bus/i2c/devices -maxdepth 2 -name "name" \
+    -exec grep -l "imx477" {} \; 2>/dev/null | head -1)
+
+if [ -n "$SYS_IMX477" ]; then
+    SYS_PATH=$(dirname "$SYS_IMX477")
+    pass "IMX477 i2c device node: $SYS_PATH"
+    ((CAM_PASS++))
+else
+    # Try the known RPi5 path directly
+    KNOWN_SYS="/sys/bus/i2c/devices/10-001a"
+    if [ -d "$KNOWN_SYS" ]; then
+        pass "IMX477 i2c node at known RPi5 path: $KNOWN_SYS"
+        ((CAM_PASS++))
+    else
+        warn "IMX477 i2c device node not found under /sys/bus/i2c/devices/"
+        echo "       Expected pattern: /sys/bus/i2c/devices/*-001a/name = imx477"
+        echo "       Check: find /sys/bus/i2c/devices -name name | xargs grep -l imx477"
     fi
 fi
 
-# rpicam fallback
-if [ "$CAM_OK" = false ]; then
-    if rpicam-still --list-cameras 2>/dev/null | grep -qi "imx477\|available"; then
-        pass "IMX477 detected via rpicam-still"
-        CAM_OK=true
+# ── E. Tuning file — ISP configuration ───────────────────────────────────────
+# The rpicam-hello output confirmed libcamera uses:
+#   /usr/local/share/libcamera/ipa/rpi/pisp/imx477.json
+# If this file is missing the ISP cannot configure the sensor correctly.
+
+TUNING_FILE="/usr/local/share/libcamera/ipa/rpi/pisp/imx477.json"
+ALT_TUNING="/usr/share/libcamera/ipa/rpi/pisp/imx477.json"
+
+if [ -f "$TUNING_FILE" ]; then
+    pass "IMX477 tuning file: $TUNING_FILE"
+    ((CAM_PASS++))
+elif [ -f "$ALT_TUNING" ]; then
+    pass "IMX477 tuning file (system): $ALT_TUNING"
+    ((CAM_PASS++))
+else
+    warn "IMX477 tuning file not found at expected paths"
+    echo "       Expected: $TUNING_FILE"
+    echo "       Rebuild rpicam-apps or reinstall libcamera-ipa"
+    ((CAM_FAIL++))
+fi
+
+# ── F. Picamera2 Python library ───────────────────────────────────────────────
+# CameraCapture (camera_capture.py) requires picamera2.
+# Check in the active conda/venv environment used by the drone stack.
+
+DRONEPI_PYTHON=""
+for PY in \
+    "$REAL_HOME/miniforge3/envs/dronepi/bin/python3" \
+    "$REAL_HOME/.venv/bin/python3" \
+    "$(command -v python3 2>/dev/null)"; do
+    if [ -x "$PY" ]; then
+        DRONEPI_PYTHON="$PY"
+        break
     fi
+done
+
+if [ -n "$DRONEPI_PYTHON" ]; then
+    PY2_CHECK=$("$DRONEPI_PYTHON" -c "import picamera2; print('ok')" 2>/dev/null)
+    if [ "$PY2_CHECK" = "ok" ]; then
+        PY2_VER=$("$DRONEPI_PYTHON" -c \
+            "import picamera2; print(picamera2.__version__)" 2>/dev/null)
+        pass "picamera2 ${PY2_VER} available in $( basename "$( dirname "$DRONEPI_PYTHON" )" )"
+        ((CAM_PASS++))
+    else
+        warn "picamera2 NOT importable from $DRONEPI_PYTHON"
+        echo "       Fix: pip install picamera2   (in the dronepi conda env)"
+        ((CAM_FAIL++))
+    fi
+else
+    warn "Could not locate a Python 3 interpreter to check picamera2"
 fi
 
-if [ "$CAM_OK" = false ]; then
-    fail "Camera NOT detected — verify CSI ribbon cable seating and lock tab"
-    echo "       Both ends of ribbon must be fully seated with lock tabs closed"
-    echo "       Tamron C-mount lens: ensure C-CS spacer ring is REMOVED for infinity focus"
-fi
-
-# Calibration file
+# ── G. Calibration file ───────────────────────────────────────────────────────
 CAL_FOUND=false
 for CAL_PATH in \
     "$(pwd)/config/camera_calibration.yaml" \
     "$REAL_HOME/config/camera_calibration.yaml" \
+    "$REAL_HOME/unitree_lidar_project/config/camera_calibration.yaml" \
     "/mnt/ssd/config/camera_calibration.yaml"; do
     if [ -f "$CAL_PATH" ]; then
         pass "Calibration file: $CAL_PATH"
@@ -270,7 +410,21 @@ for CAL_PATH in \
         break
     fi
 done
-[ "$CAL_FOUND" = false ] && warn "camera_calibration.yaml not found in expected locations"
+[ "$CAL_FOUND" = false ] && warn "camera_calibration.yaml not found — photogrammetry reconstruction will use default intrinsics"
+
+# ── Camera section summary ────────────────────────────────────────────────────
+echo ""
+if [ "$CAM_DETECTED" = true ]; then
+    if [ "$CAM_FAIL" -eq 0 ]; then
+        echo -e "  ${GREEN}Camera section: IMX477 confirmed — all sub-checks passed${NC}"
+    else
+        echo -e "  ${YELLOW}Camera section: IMX477 detected but $CAM_FAIL sub-check(s) failed — review above${NC}"
+    fi
+else
+    echo -e "  ${RED}Camera section: IMX477 NOT detected — flight camera unavailable${NC}"
+    echo "  Verify: CSI ribbon cable seated, lock tabs closed at both ends"
+    echo "          Tamron C-mount lens: C-CS spacer ring must be REMOVED for infinity focus"
+fi
 
 # ============================================================
 section "6. LIDAR — Unitree 4D L1 (CP210x)"
@@ -312,7 +466,6 @@ else
     warn "TP-Link AC600 not confirmed on USB bus (check: lsusb | grep 2357)"
 fi
 
-# Strip trailing colon from interface name if present
 WLAN_IF=$(ip link show | grep -oP '(?<=\d: )wlan[^:@\s]+' | head -1 | tr -d ':')
 if [ -n "$WLAN_IF" ]; then
     pass "Wireless interface active: $WLAN_IF"
@@ -381,7 +534,6 @@ elif [ "$RAM_STATUS" = "warn" ]; then warn "Available RAM: ${FREE_RAM}MB — clo
 else                                   fail "Available RAM critically low: ${FREE_RAM}MB"
 fi
 
-# CPU clock — fixed formatting
 CPU_HZ=$(vcgencmd measure_clock arm 2>/dev/null | grep -oP '[0-9]+$')
 if [ -n "$CPU_HZ" ]; then
     CPU_GHZ=$(awk -v h="$CPU_HZ" 'BEGIN{ printf "%.2f", h/1000000000 }')
