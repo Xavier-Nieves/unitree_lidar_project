@@ -977,7 +977,7 @@
 
     <!-- Connection bar -->
     <div id="conn-bar">
-      <input type="text" id="fg-ws-input" value="" placeholder="ws://RPI_IP:8765" spellcheck="false">
+      <input type="text" id="fg-ws-input" value="" placeholder="ws://RPI_IP:9001" spellcheck="false">
       <button id="conn-btn" onclick="connectFoxglove()">Connect</button>
     </div>
 
@@ -2356,31 +2356,24 @@ function connectFoxglove() {
 window.connectFoxglove = connectFoxglove;
 
 function openFoxgloveTab() {
-  const wsUrl = fgWsUrl || document.getElementById('fg-ws-input').value.trim();
-  if (!wsUrl) return;
-  const fgUrl = `https://app.foxglove.dev/?ds=foxglove-websocket&ds.url=${encodeURIComponent(wsUrl)}`;
-  window.open(fgUrl, '_blank');
+  const input = document.getElementById('fg-ws-input').value.trim();
+  if (!input) return;
+
+  try {
+    const url = new URL(input);
+    const foxgloveWs = `ws://${url.hostname}:8765`;
+    const fgUrl = `https://app.foxglove.dev/?ds=foxglove-websocket&ds.url=${encodeURIComponent(foxgloveWs)}`;
+    window.open(fgUrl, '_blank');
+  } catch (e) {
+    console.error('Invalid WS URL', e);
+  }
 }
 window.openFoxgloveTab = openFoxgloveTab;
 
 // ══════════════════════════════════════════════════════════════════════════════
 // DIRECT WEBSOCKET — telemetry panel data
-// Connects to foxglove-bridge and subscribes to key topics
+// Connects to custom JSON telemetry server on port 9001
 // ══════════════════════════════════════════════════════════════════════════════
-const TOPIC_MAP = {
-  // MAVLink/ROS topics
-  '/mavros/state':                          parseState,
-  '/mavros/global_position/rel_alt':        parseAlt,
-  '/mavros/local_position/velocity_local':  parseSpeed,
-  '/mavros/imu/data':                       parseIMU,
-  '/mavros/global_position/global':         parseGPS,
-  // PX4 ROS2
-  '/fmu/out/vehicle_attitude':              parseIMU,
-  '/fmu/out/vehicle_gps_position':          parseGPS,
-  // RPI health node topics (published by rpi_health_node.py)
-  '/rpi/health':                            parseRpiHealth,
-};
-
 let gpsTrack = [];
 let plotData = {};
 const PLOT_LEN = 120;
@@ -2390,23 +2383,30 @@ let activePlotKey = 'altitude';
 ['altitude','speed','roll','pitch','yaw','cpu_pct','cpu_temp','mem_pct','disk_pct','cpu_freq'].forEach(k => { plotData[k] = []; });
 
 function connectTelemetryWs(wsUrl) {
-  if (fgWs) { try { fgWs.close(); } catch(e){} }
+  if (fgWs) {
+    try { fgWs.close(); } catch (e) {}
+  }
 
+  console.log('[MeshView] connecting to', wsUrl);
   fgWs = new WebSocket(wsUrl);
-  fgWs.binaryType = 'arraybuffer';
 
   fgWs.onopen = () => {
     fgConnected = true;
+    msgCount = 0;
+    msgCountLast = 0;
+
     document.getElementById('conn-btn').textContent = 'Connected';
     document.getElementById('conn-btn').classList.add('connected');
     document.getElementById('live-ws-status').textContent = 'OPEN';
 
     liveStartTime = Date.now();
+    clearInterval(uptimeInterval);
+    clearInterval(hzInterval);
     uptimeInterval = setInterval(updateUptime, 1000);
     hzInterval = setInterval(updateHz, 1000);
 
-    // foxglove-bridge handshake — subscribe to topics
-    fgWs.send(JSON.stringify({ op: 'subscribe', topics: Object.keys(TOPIC_MAP) }));
+    document.getElementById('topics-list').textContent = 'Connected - waiting for telemetry...';
+    fgWs.send(JSON.stringify({ op: 'get_snapshot' }));
   };
 
   fgWs.onmessage = (evt) => {
@@ -2415,27 +2415,47 @@ function connectTelemetryWs(wsUrl) {
 
     let msg;
     try {
-      if (typeof evt.data === 'string') msg = JSON.parse(evt.data);
-      else return; // binary frames (encoded msgs) — skip for simple parsing
-    } catch(e) { return; }
-
-    // Handle server info — extract topic list
-    if (msg.op === 'serverInfo' || msg.op === 'advertise') {
-      const topics = msg.channels || msg.topics || [];
-      updateTopicsList(topics);
+      msg = JSON.parse(evt.data);
+    } catch (e) {
+      console.warn('[MeshView] bad JSON frame', evt.data);
+      return;
     }
 
-    // Handle incoming message
-    if (msg.op === 'message' && msg.topic && TOPIC_MAP[msg.topic]) {
-      try { TOPIC_MAP[msg.topic](msg.msg || msg.message || {}); } catch(e) {}
+    if (msg.op === 'snapshot') {
+      if (msg.data?.vehicle) applyVehicleData(msg.data.vehicle);
+      if (msg.data?.rpi) applyRpiData(msg.data.rpi);
+
+      updateTopicsList([
+        '/mavros/state',
+        '/mavros/global_position/rel_alt',
+        '/mavros/local_position/velocity_local',
+        '/mavros/imu/data',
+        '/mavros/global_position/global',
+        '/rpi/health'
+      ]);
+      return;
     }
+
+    if (msg.op === 'vehicle' && msg.data) {
+      applyVehicleData(msg.data);
+      return;
+    }
+
+    if (msg.op === 'rpi' && msg.data) {
+      applyRpiData(msg.data);
+      return;
+    }
+
+    if (msg.op === 'pong') return;
   };
 
-  fgWs.onerror = () => {
+  fgWs.onerror = (err) => {
+    console.error('[MeshView] websocket error', err);
     document.getElementById('live-ws-status').textContent = 'ERR';
   };
 
-  fgWs.onclose = () => {
+  fgWs.onclose = (evt) => {
+    console.warn('[MeshView] websocket closed', evt.code, evt.reason);
     fgConnected = false;
     document.getElementById('conn-btn').textContent = 'Connect';
     document.getElementById('conn-btn').classList.remove('connected');
@@ -2443,6 +2463,96 @@ function connectTelemetryWs(wsUrl) {
     clearInterval(uptimeInterval);
     clearInterval(hzInterval);
   };
+}
+
+function applyVehicleData(v) {
+  if (typeof v.altitude_m === 'number') {
+    setVal('val-alt', v.altitude_m.toFixed(1));
+    pushPlot('altitude', v.altitude_m);
+  }
+
+  if (typeof v.speed_mps === 'number') {
+    setVal('val-spd', v.speed_mps.toFixed(1));
+    pushPlot('speed', v.speed_mps);
+  }
+
+  if (typeof v.roll_deg === 'number') {
+    setVal('val-roll', v.roll_deg.toFixed(1));
+    pushPlot('roll', v.roll_deg);
+  }
+
+  if (typeof v.pitch_deg === 'number') {
+    setVal('val-pitch', v.pitch_deg.toFixed(1));
+    pushPlot('pitch', v.pitch_deg);
+  }
+
+  if (typeof v.yaw_deg === 'number') {
+    setVal('val-yaw', v.yaw_deg.toFixed(1));
+    pushPlot('yaw', v.yaw_deg);
+  }
+
+  if (typeof v.satellites === 'number') {
+    setVal('val-sats', v.satellites);
+  }
+
+  if (typeof v.armed === 'boolean') {
+    const badge = document.getElementById('arm-badge');
+    badge.textContent = v.armed ? '● ARMED' : '● DISARMED';
+    badge.className = v.armed ? 'armed' : 'disarmed';
+  }
+
+  if (v.mode) {
+    document.getElementById('mode-badge').textContent = v.mode;
+  }
+
+  if (v.gps && typeof v.gps.lat === 'number' && typeof v.gps.lon === 'number') {
+    document.getElementById('gps-coords').textContent = `Lat: ${v.gps.lat.toFixed(6)}  |  Lon: ${v.gps.lon.toFixed(6)}`;
+    gpsTrack.push({ lat: v.gps.lat, lon: v.gps.lon });
+    if (gpsTrack.length > 500) gpsTrack.shift();
+    drawGpsMap();
+  }
+}
+
+function applyRpiData(r) {
+  if (typeof r.cpu_pct === 'number') {
+    setCard('val-cpu', r.cpu_pct.toFixed(1), r.cpu_pct > 85 ? 'danger' : r.cpu_pct > 60 ? 'warn' : 'good', 'card-cpu');
+    document.getElementById('cpu-bar').style.width = `${Math.min(r.cpu_pct, 100)}%`;
+    pushPlot('cpu_pct', r.cpu_pct);
+  }
+
+  if (typeof r.cpu_temp_c === 'number') {
+    setCard('val-temp', r.cpu_temp_c.toFixed(1), r.cpu_temp_c > 75 ? 'danger' : r.cpu_temp_c > 60 ? 'warn' : 'good', 'card-temp');
+    document.getElementById('temp-bar').style.width = `${Math.min((r.cpu_temp_c / 85) * 100, 100)}%`;
+    pushPlot('cpu_temp', r.cpu_temp_c);
+  }
+
+  if (typeof r.mem_pct === 'number') {
+    setCard('val-mem', r.mem_pct.toFixed(1), r.mem_pct > 85 ? 'danger' : r.mem_pct > 65 ? 'warn' : '', 'card-mem');
+    pushPlot('mem_pct', r.mem_pct);
+  }
+
+  if (typeof r.disk_pct === 'number') {
+    setCard('val-disk', r.disk_pct.toFixed(1), r.disk_pct > 90 ? 'danger' : r.disk_pct > 75 ? 'warn' : '', 'card-disk');
+    pushPlot('disk_pct', r.disk_pct);
+  }
+
+  if (typeof r.cpu_freq_mhz === 'number') {
+    setVal('val-freq', r.cpu_freq_mhz.toFixed(0));
+    pushPlot('cpu_freq', r.cpu_freq_mhz);
+  }
+
+  if (typeof r.throttled === 'boolean') {
+    const el = document.getElementById('val-throttle');
+    el.textContent = r.throttled ? '⚠ YES' : '✓ OK';
+    el.style.color = r.throttled ? '#df4a4a' : '#4adf8a';
+    document.getElementById('card-throttle').className = `telem-card ${r.throttled ? 'danger' : 'good'}`;
+  }
+}
+
+function pushPlot(key, value) {
+  if (!plotData[key]) plotData[key] = [];
+  plotData[key].push(value);
+  if (plotData[key].length > PLOT_LEN) plotData[key].shift();
 }
 
 // ── Topic parsers ──────────────────────────────────────────────────────────

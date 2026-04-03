@@ -5,14 +5,22 @@ Description=DronePi Flight Stack Watchdog (Point-LIO + bag recorder)
 # dronepi-main.service declares Requires=drone-watchdog.service, so if this
 # service fails to start or crashes unrecoverably, main.py will also be stopped
 # by systemd — the correct fail-safe when the bag/postflight supervisor is gone.
-After=mavros.service mnt-ssd.mount dronepi-hotspot.service
+#
+# LED NOTE: This service no longer owns GPIO. LED state is written to
+# /tmp/led_state.json and consumed by led.service. The watchdog does NOT
+# Require= led.service — if LED fails the watchdog continues operating.
+After=mavros.service mnt-ssd.mount dronepi-hotspot.service led.service
 Requires=mavros.service
-Wants=mnt-ssd.mount dronepi-hotspot.service
+Wants=mnt-ssd.mount dronepi-hotspot.service led.service
 
 [Service]
 Type=simple
 User=dronepi
 Environment="HOME=/home/dronepi"
+
+# WorkingDirectory set to /tmp so any transient file operations
+# (including LED state file writes) have a writable working directory.
+WorkingDirectory=/tmp
 
 # Source ROS 2 before running the watchdog so rclpy and mavros_msgs
 # are importable. The watchdog launches Point-LIO and the bag recorder

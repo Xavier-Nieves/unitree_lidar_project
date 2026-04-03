@@ -90,7 +90,6 @@ COLLISION_SCRIPT    = FLIGHT_DIR / "collision_monitor.py"
 CAMERA_SCRIPT       = FLIGHT_DIR / "camera_capture.py"
 POSTFLIGHT_SCRIPT   = UTILS_DIR  / "run_postflight.py"
 HAILO_FLIGHT_SCRIPT = PROJECT_ROOT / "hailo" / "hailo_flight_node.py"
-LED_SCRIPT          = PROJECT_ROOT / "watchdog_core" / "led_controller.py"
 LIDAR_PORT          = Path("/dev/ttyUSB0")
 HAILO_DEVICE      = Path("/dev/hailo0")
 MISSION_LOCK      = Path("/tmp/dronepi_mission.lock")
@@ -168,21 +167,61 @@ def log_mode(mode: FlightMode, detail: str = "") -> None:
     log(f"[{mode.value}]{sep}")
 
 
-def _led_init():
-    """Import and instantiate LEDController. Returns instance or None.
+# ── Main Status Writer ───────────────────────────────────────────────────────
+# main.py does NOT touch GPIO. It writes system status to /tmp/main_status.json.
+# led_service.py observes this file (and watchdog_status.json + mission lock)
+# and derives the correct LED state autonomously.
+#
+# To add a new LED-visible condition from main.py:
+#   1. Add a field to the payload dict in _write_main_status() below.
+#   2. Read it in led_service.py _read_snapshot() and _derive_state().
+#   3. Add a _Pattern entry and priority rule in led_service.py.
 
-    Non-fatal — if watchdog_core is not on sys.path or gpiozero is absent
-    (e.g. bench testing off-device), all LED calls degrade to no-ops via
-    the LEDController's own disabled-mode guard.
+_MAIN_STATUS_FILE     = "/tmp/main_status.json"
+_MAIN_STATUS_FILE_TMP = _MAIN_STATUS_FILE + ".tmp"
+
+
+def _write_main_status(
+    hailo_active:   bool = False,
+    hailo_degraded: bool = False,
+    hailo_failed:   bool = False,
+) -> None:
+    """
+    Write main.py heartbeat and Hailo status to /tmp/main_status.json.
+
+    Must be called on every poll cycle during autonomous flight so
+    led_service.py sees a live timestamp. If the timestamp goes stale
+    beyond MAIN_DEAD_S (8s) while autonomous lock is active, led_service.py
+    transitions to MAIN_DEAD.
+
+    Parameters
+    ----------
+    hailo_active   : Hailo node publishing and augmenting EKF2
+    hailo_degraded : FlowBridge degraded — consecutive rejection threshold exceeded
+    hailo_failed   : Hailo process exited unexpectedly mid-flight
     """
     try:
-        sys.path.insert(0, str(PROJECT_ROOT / "watchdog_core"))
-        from led_controller import LEDController, LEDState
-        ctrl = LEDController()
-        return ctrl, LEDState
+        payload = json.dumps({
+            "ts":            time.time(),
+            "hailo_active":  hailo_active,
+            "hailo_degraded":hailo_degraded,
+            "hailo_failed":  hailo_failed,
+        })
+        with open(_MAIN_STATUS_FILE_TMP, "w") as f:
+            f.write(payload)
+        os.replace(_MAIN_STATUS_FILE_TMP, _MAIN_STATUS_FILE)
     except Exception as exc:
-        log(f"[LED] Controller unavailable: {exc} — LED feedback disabled")
-        return None, None
+        log(f"[STATUS] Main status write failed: {exc}")
+
+
+def _clear_main_status() -> None:
+    """Remove main status file on clean shutdown."""
+    try:
+        Path(_MAIN_STATUS_FILE).unlink(missing_ok=True)
+        Path(_MAIN_STATUS_FILE_TMP).unlink(missing_ok=True)
+    except Exception:
+        pass
+
 
 # ── Lock File ─────────────────────────────────────────────────────────────────
 
@@ -273,6 +312,9 @@ class MainNode:
             from geometry_msgs.msg import PoseStamped
             from mavros_msgs.msg import State, WaypointList, HomePosition
             from mavros_msgs.srv import SetMode
+            from sensor_msgs.msg import NavSatFix
+            from std_msgs.msg import String
+            from geometry_msgs.msg import TwistStamped
         except ImportError as exc:
             log(f"[FAIL] ROS 2 not sourced: {exc}")
             sys.exit(1)
@@ -311,13 +353,13 @@ class MainNode:
             PoseStamped, "/mavros/local_position/pose",
             self._pose_cb, sensor_qos)
         self._node.create_subscription(
-            __import__("mavros_msgs").msg.WaypointList,
+            WaypointList,
             "/mavros/mission/waypoints", self._wp_cb, 10)
         self._node.create_subscription(
             HomePosition, "/mavros/home_position/home",
             self._home_cb, sensor_qos)
         self._node.create_subscription(
-            __import__("std_msgs").msg.String,
+            String,
             "/dronepi/collision_zone",
             self._zone_cb, reliable_qos)
         self._node.create_subscription(
@@ -327,17 +369,17 @@ class MainNode:
 
         # Live GPS position — used for camera sidecar metadata
         self._node.create_subscription(
-            __import__("sensor_msgs").msg.NavSatFix,
+            NavSatFix,
             "/mavros/global_position/global",
             self._gps_cb, sensor_qos)
 
         # Hailo in-flight topics — optional, non-fatal if not publishing
         self._node.create_subscription(
-            __import__("geometry_msgs").msg.TwistStamped,
+            TwistStamped,
             HAILO_FLOW_TOPIC,
             self._hailo_flow_cb, sensor_qos)
         self._node.create_subscription(
-            __import__("std_msgs").msg.String,
+            String,
             HAILO_GROUND_TOPIC,
             self._hailo_ground_cb, reliable_qos)
 
@@ -817,7 +859,7 @@ def handle_manual_scan(node: MainNode) -> None:
              "Disarmed — watchdog will stop bag and run post-flight processing")
 
 
-def handle_autonomous(node: MainNode, led=None, LEDState=None) -> None:
+def handle_autonomous(node: MainNode) -> None:
     """MODE 3 — Autonomous survey. main.py owns the full flight stack.
 
     Execution order:
@@ -837,9 +879,7 @@ def handle_autonomous(node: MainNode, led=None, LEDState=None) -> None:
         9. Wait for disarm, then tear down all processes and camera.
 
     Args:
-        node:     MainNode — shared ROS 2 node.
-        led:      LEDController instance or None.
-        LEDState: LEDState enum class or None.
+        node: MainNode — shared ROS 2 node.
     """
     log_mode(FlightMode.AUTONOMOUS, "Starting autonomous survey mission")
 
@@ -899,15 +939,13 @@ def handle_autonomous(node: MainNode, led=None, LEDState=None) -> None:
         if _wait_for_topic_hz(HAILO_FLOW_TOPIC, 5.0, HAILO_STARTUP_TIMEOUT_S):
             log("Hailo flight node active — optical flow augmentation enabled")
             HAILO_LOCK.write_text("flight")
-            if led and LEDState:
-                led.set_state(LEDState.HAILO_ACTIVE)
+            _write_main_status(hailo_active=True)
         else:
             log("[WARN] Hailo node did not publish within timeout — continuing without it")
             log("       CPU load will be higher. Check /dev/hailo0 and hailo_inference_env")
             stop_proc("Hailo flight node", hailo_proc)
             hailo_proc = None
-            if led and LEDState:
-                led.set_state(LEDState.HAILO_FAILED)
+            _write_main_status(hailo_failed=True)
     else:
         if not HAILO_DEVICE.exists():
             log("[INFO] /dev/hailo0 not found — Hailo flight node skipped")
@@ -946,8 +984,7 @@ def handle_autonomous(node: MainNode, led=None, LEDState=None) -> None:
             def _on_flow_degraded():
                 """Called by FlowBridge after FALLBACK_ESCALATE_COUNT rejections."""
                 log("[HAILO] Flow bridge degraded — consecutive rejections exceeded threshold")
-                if led and LEDState:
-                    led.set_state(LEDState.HAILO_DEGRADED)
+                _write_main_status(hailo_active=True, hailo_degraded=True)
 
             flow_bridge = FlowBridge(
                 node=node._node,
@@ -1064,8 +1101,7 @@ def handle_autonomous(node: MainNode, led=None, LEDState=None) -> None:
             hailo_proc = None
             flow_bridge = None
             HAILO_LOCK.unlink(missing_ok=True)
-            if led and LEDState:
-                led.set_state(LEDState.HAILO_FAILED)
+            _write_main_status(hailo_failed=True)
 
         # Fly to waypoint
         reached = node.fly_to(ex, ey, ez, 0.0, timeout=120.0)
@@ -1122,9 +1158,7 @@ def main() -> None:
     clear_lock()
 
     # ── LED controller — non-fatal if unavailable ─────────────────────────────
-    led, LEDState = _led_init()
-    if led:
-        led.set_state(LEDState.WAITING_FCU)
+    _write_main_status()
 
     node = MainNode()
 
@@ -1137,19 +1171,13 @@ def main() -> None:
 
     if node.connected:
         log(f"FCU connected  mode={node.mode}")
-        if led:
-            led.set_state(LEDState.IDLE)
     else:
         log("[WARN] FCU not connected — will retry on each arm detection")
-        if led:
-            led.set_state(LEDState.WARNING)
 
     def _shutdown(signum=None, frame=None) -> None:
         log("Shutdown signal received")
         clear_lock()
-        if led:
-            led.set_state(LEDState.OFF)
-            led.cleanup()
+        _clear_main_status()
         node.shutdown()
         sys.exit(0)
 
@@ -1169,14 +1197,11 @@ def main() -> None:
                 if not lidar:
                     log_mode(FlightMode.IDLE,
                              "Armed, LiDAR absent → MODE 1 (no scan)")
-                    if led:
-                        led.set_state(LEDState.WARNING)
                     current_mode = FlightMode.NO_SCAN
                     handle_no_scan(node)
                     current_mode = FlightMode.IDLE
                     clear_lock()
-                    if led:
-                        led.set_state(LEDState.IDLE)
+                    _write_main_status()
                 else:
                     if debounce_start is None:
                         debounce_start = time.time()
@@ -1186,8 +1211,8 @@ def main() -> None:
                     current_mode = FlightMode.DEBOUNCE
             else:
                 debounce_start = None
-                if led and led.current_state() not in (LEDState.IDLE, LEDState.WAITING_FCU):
-                    led.set_state(LEDState.IDLE)
+
+                _write_main_status()
                 log_mode(FlightMode.IDLE,
                          f"armed={armed}  mode={mode}  "
                          f"lidar={'yes' if lidar else 'no'}")
@@ -1198,21 +1223,15 @@ def main() -> None:
                          "Disarmed during debounce — cancelled, returning to IDLE")
                 current_mode   = FlightMode.IDLE
                 debounce_start = None
-                if led:
-                    led.set_state(LEDState.IDLE)
 
             elif mode == "OFFBOARD":
                 log_mode(FlightMode.DEBOUNCE,
                          "OFFBOARD detected — committing MODE 3 (autonomous)")
                 current_mode   = FlightMode.AUTONOMOUS
                 debounce_start = None
-                if led:
-                    led.set_state(LEDState.SCANNING)
-                handle_autonomous(node, led=led, LEDState=LEDState)
+                handle_autonomous(node)
                 current_mode = FlightMode.IDLE
                 clear_lock()
-                if led:
-                    led.set_state(LEDState.IDLE)
 
             elif time.time() - debounce_start >= DEBOUNCE_S:
                 log_mode(FlightMode.DEBOUNCE,
@@ -1220,14 +1239,13 @@ def main() -> None:
                          f"committing MODE 2 (manual scan)")
                 current_mode   = FlightMode.MANUAL
                 debounce_start = None
-                if led:
-                    led.set_state(LEDState.SCANNING)
                 handle_manual_scan(node)
                 current_mode = FlightMode.IDLE
 
             else:
                 elapsed   = time.time() - debounce_start
                 remaining = DEBOUNCE_S - elapsed
+                _write_main_status()
                 log_mode(FlightMode.DEBOUNCE,
                          f"mode={mode}  {remaining:.1f}s remaining...")
 

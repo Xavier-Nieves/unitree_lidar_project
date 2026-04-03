@@ -1,0 +1,41 @@
+[Unit]
+Description=DronePi LED GPIO Service
+# Starts independently of the watchdog — LED service must be running before
+# the watchdog so the WAITING_FCU state is visible from the first write.
+# drone-watchdog does not Require= this service; if LED fails, the watchdog
+# continues operating — LED is informational, not safety-critical.
+After=multi-user.target
+
+[Service]
+Type=simple
+User=dronepi
+Group=gpio
+
+# Force lgpio backend — required for Pi 5 / Ubuntu 24.
+# lgpio talks directly to /dev/gpiochip* (character device interface).
+# No daemon process is required.
+Environment="GPIOZERO_PIN_FACTORY=lgpio"
+
+# lgpio creates notify pipes relative to WorkingDirectory.
+# Must be a writable path — /tmp is correct here.
+Environment="HOME=/tmp"
+WorkingDirectory=/tmp
+
+# Activate the conda environment before running.
+# The dronepi env contains gpiozero and lgpio installed via pip.
+ExecStart=/bin/bash -c "\
+    source /home/dronepi/miniforge3/etc/profile.d/conda.sh && \
+    conda activate dronepi && \
+    python3 /home/dronepi/unitree_lidar_project/unitree_drone_mapper/flight/led_service.py"
+
+# Always restart — LED service must stay alive regardless of crash reason.
+# If GPIO hardware is unavailable at boot, systemd will retry every 5s.
+Restart=always
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=led
+
+[Install]
+WantedBy=multi-user.target

@@ -45,6 +45,7 @@ Deployment
 """
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -54,12 +55,54 @@ from watchdog_core.mavros_reader  import MavrosReader
 from watchdog_core.flight_stack   import FlightStack, ROSBAG_DIR
 from watchdog_core.postflight     import PostflightMonitor
 
-# LED controller — imported from watchdog_core alongside this file
-try:
-    from watchdog_core.led_controller import LEDController, LEDState
-    _LED_AVAILABLE = True
-except Exception:
-    _LED_AVAILABLE = False
+# LED IPC — watchdog writes system status; led_service.py observes and drives GPIO.
+# Importing pin/state constants from led_controller for reference only.
+from watchdog_core.led_controller import LED_STATES   # noqa: F401 — validation reference
+
+_WATCHDOG_STATUS_FILE     = "/tmp/watchdog_status.json"
+_WATCHDOG_STATUS_FILE_TMP = _WATCHDOG_STATUS_FILE + ".tmp"
+
+
+def _write_status(
+    fcu: bool = False,
+    armed: bool = False,
+    processing: bool = False,
+) -> None:
+    """
+    Write the watchdog heartbeat and system status to /tmp/watchdog_status.json.
+
+    Called on every poll cycle so led_service.py receives a fresh timestamp.
+    If the timestamp goes stale beyond WATCHDOG_DEAD_S (5s), led_service.py
+    transitions to WATCHDOG_DEAD — visually distinct from any flight state.
+
+    Parameters
+    ----------
+    fcu        : FCU connected via MAVROS
+    armed      : Vehicle armed state
+    processing : Post-flight processing currently running
+    """
+    try:
+        import json as _json
+        payload = _json.dumps({
+            "ts":         time.time(),
+            "fcu":        fcu,
+            "armed":      armed,
+            "processing": processing,
+        })
+        with open(_WATCHDOG_STATUS_FILE_TMP, "w") as f:
+            f.write(payload)
+        os.replace(_WATCHDOG_STATUS_FILE_TMP, _WATCHDOG_STATUS_FILE)
+    except Exception as exc:
+        log(f"[STATUS] Watchdog status write failed: {exc}")
+
+
+def _clear_status() -> None:
+    """Remove status file on clean shutdown so led_service sees a clean exit."""
+    try:
+        Path(_WATCHDOG_STATUS_FILE).unlink(missing_ok=True)
+        Path(_WATCHDOG_STATUS_FILE_TMP).unlink(missing_ok=True)
+    except Exception:
+        pass
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -123,24 +166,19 @@ def main() -> None:
     ROSBAG_DIR.mkdir(parents=True, exist_ok=True)
 
     # ── LED controller ────────────────────────────────────────────────────────
-    led = LEDController() if _LED_AVAILABLE else None
-    if led:
-        led.set_state(LEDState.WAITING_FCU)
+    _write_status(fcu=False, armed=False, processing=False)
 
     # ── Initialise components ─────────────────────────────────────────────────
     try:
         reader = MavrosReader()
     except Exception as exc:
         log(f"[FAIL] ROS 2 init failed: {exc}")
-        if led:
-            led.set_state(LEDState.ERROR)
-            led.cleanup()
+        _clear_status()
         sys.exit(1)
 
     _wait_for_mavros(reader)
 
-    if reader.connected and led:
-        led.set_state(LEDState.IDLE)
+    # Status will be updated in the main loop
 
     postflight = PostflightMonitor(reader)
     stack      = FlightStack(reader, postflight_fn=postflight.trigger)
@@ -155,9 +193,8 @@ def main() -> None:
                 if stack.is_running:
                     log("Lock mode switched to bench_scan — stopping watchdog stack")
                     stack.stop()
-                    if led:
-                        led.set_state(LEDState.IDLE)
                 log("[WATCHDOG] bench_scan lock active — yielding to test script")
+                _write_status(fcu=reader.connected, armed=reader.armed)
                 time.sleep(1.0 / POLL_HZ)
                 continue
 
@@ -166,9 +203,8 @@ def main() -> None:
                 if stack.is_running:
                     log("Lock mode switched to autonomous — stopping watchdog stack")
                     stack.stop()
-                    if led:
-                        led.set_state(LEDState.IDLE)
                 log("[WATCHDOG] autonomous lock active — yielding to main.py")
+                _write_status(fcu=reader.connected, armed=reader.armed)
                 time.sleep(1.0 / POLL_HZ)
                 continue
 
@@ -181,21 +217,15 @@ def main() -> None:
                         log("[WATCHDOG] Stack startup failed — clearing lock, returning to IDLE")
                         if MISSION_LOCK.exists():
                             MISSION_LOCK.unlink()
-                        if led:
-                            led.set_state(LEDState.ERROR)
                         time.sleep(1.0 / POLL_HZ)
                         continue
-                    if led:
-                        led.set_state(LEDState.SCANNING)
-
                 stack.check_health()
+                _write_status(fcu=reader.connected, armed=reader.armed)
 
                 # Wait for disarm, then trigger post-flight and clear lock
                 if not reader.armed:
                     log("[WATCHDOG] Disarmed — stopping stack")
                     stack.stop()
-                    if led:
-                        led.set_state(LEDState.PROCESSING)
                     if MISSION_LOCK.exists():
                         MISSION_LOCK.unlink()
                         log("Lock cleared")
@@ -209,10 +239,7 @@ def main() -> None:
                     log("RC button pressed — starting stack")
                     reader.beep_ack()
                     ok = stack.start("MANUAL_RC")
-                    if ok and led:
-                        led.set_state(LEDState.SCANNING)
-                    elif not ok and led:
-                        led.set_state(LEDState.ERROR)
+
                 else:
                     ch_val = reader.get_rc_channel(RC_TOGGLE_CHANNEL)
                     log(
@@ -220,15 +247,16 @@ def main() -> None:
                         f"mode={reader.mode or '?'}  "
                         f"CH{RC_TOGGLE_CHANNEL + 1}={ch_val}"
                     )
+                    _write_status(fcu=reader.connected, armed=reader.armed)
                     time.sleep(1.0 / POLL_HZ)
             else:
                 stack.check_health()
+                _write_status(fcu=reader.connected, armed=reader.armed)
                 if ENABLE_RC_TOGGLE and reader.check_toggle_pressed():
                     log("RC button pressed — stopping stack")
                     reader.beep_ack()
                     stack.stop()
-                    if led:
-                        led.set_state(LEDState.PROCESSING)
+                    _write_status(fcu=reader.connected, armed=reader.armed, processing=True)
                 else:
                     time.sleep(1.0 / MONITOR_HZ)
 
@@ -238,11 +266,9 @@ def main() -> None:
         if stack.is_running:
             stack.stop()
         reader.shutdown()
-        if led:
-            led.set_state(LEDState.OFF)
-            led.cleanup()
+        _clear_status()
         log("Watchdog stopped.")
-
+        
 
 if __name__ == "__main__":
     main()

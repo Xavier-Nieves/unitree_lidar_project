@@ -1,0 +1,24 @@
+[Unit]
+Description=MeshView Telemetry JSON WebSocket Server (port 9001)
+After=network.target foxglove-bridge.service rpi-health.service drone-mesh-server.service
+Wants=foxglove-bridge.service rpi-health.service drone-mesh-server.service
+
+[Service]
+Type=simple
+User=dronepi
+WorkingDirectory=/home/dronepi/unitree_lidar_project/rpi_server
+
+Environment=HOME=/home/dronepi
+Environment=PYTHONUNBUFFERED=1
+
+ExecStart=/bin/bash -c 'source /opt/ros/jazzy/setup.bash && source /home/dronepi/unitree_lidar_project/RPI5/ros2_ws/install/setup.bash && python3 /home/dronepi/unitree_lidar_project/rpi_server/meshview_telemetry_server.py'
+
+Restart=on-failure
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=meshview-telemetry
+
+[Install]
+WantedBy=multi-user.target

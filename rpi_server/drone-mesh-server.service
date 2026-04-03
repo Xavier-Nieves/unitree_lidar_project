@@ -1,0 +1,26 @@
+[Unit]
+Description=Drone Mesh HTTP Server (port 8080)
+Documentation=http://10.42.0.1:8080/meshview.html
+# Wait for SSD to be mounted and hotspot to be up
+After=mnt-ssd.mount dronepi-hotspot.service
+Wants=mnt-ssd.mount dronepi-hotspot.service
+# Hard dependency — if SSD is not mounted, do not start
+RequiresMountsFor=/mnt/ssd
+
+[Service]
+Type=simple
+User=dronepi
+WorkingDirectory=/mnt/ssd/maps
+# Guard: verify /mnt/ssd is a live mountpoint before starting python process
+# If this fails (SSD absent), service enters failed state cleanly — no broken cwd
+ExecStartPre=/bin/mountpoint -q /mnt/ssd
+ExecStart=/usr/bin/python3 /mnt/ssd/maps/serve.py
+Restart=on-failure
+RestartSec=5
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=drone-mesh-server
+
+[Install]
+WantedBy=multi-user.target
