@@ -1,47 +1,36 @@
 """watchdog_core/postflight.py — Post-flight processing monitor.
 
 Launches run_postflight.py as a subprocess and:
-  - Pipes its stdout line-by-line to the watchdog log (prefixed [POSTFLIGHT])
-  - Plays TUNE_PROCESSING every 5 seconds while it runs (via PostflightBeeper)
-  - Plays TUNE_DONE when it finishes successfully
-  - Plays TUNE_ERROR if it exits with a non-zero return code
+  - Pipes stdout line-by-line to the watchdog log
+  - Plays a repeating post-process tone while it runs (via PostflightBeeper)
+  - Plays TUNE_POSTPROCESS_DONE when it finishes successfully
+  - Plays TUNE_ERROR once if it exits non-zero
 
 Everything runs on daemon threads so the watchdog main loop is never blocked.
-
-Public API
-----------
-  PostflightMonitor.trigger()   — call after each flight session ends
-  PostflightMonitor.is_active   — True while a postflight job is in progress
 """
+
+from __future__ import annotations
 
 import subprocess
 import sys
 import threading
 from pathlib import Path
 
-from .buzzer import PostflightBeeper
+from .buzzer import PostflightBeeper, TUNE_ERROR, TUNE_POSTPROCESS_DONE
 from .logging_utils import log
 
-# ── Path ──────────────────────────────────────────────────────────────────────
-
-SCRIPT_DIR        = Path(__file__).parent.parent          # project root
+SCRIPT_DIR = Path(__file__).parent.parent
 POSTFLIGHT_SCRIPT = SCRIPT_DIR.parent / "utils" / "run_postflight.py"
 
 
-# ── PostflightMonitor ─────────────────────────────────────────────────────────
-
 class PostflightMonitor:
-    """Manages a single postflight subprocess with beeper feedback and log piping.
+    """Manages a single postflight subprocess with beeper feedback and log piping."""
 
-    Args:
-        reader:  MavrosReader — used to play buzzer tunes.
-    """
-
-    def __init__(self, reader):
-        self._reader  = reader
-        self._beeper  = PostflightBeeper(reader.play_tune)
-        self._lock    = threading.Lock()
-        self._active  = False
+    def __init__(self, reader) -> None:
+        self._reader = reader
+        self._beeper = PostflightBeeper(reader.play_tune)
+        self._lock = threading.Lock()
+        self._active = False
 
     @property
     def is_active(self) -> bool:
@@ -61,42 +50,35 @@ class PostflightMonitor:
             self._active = True
 
         log("[POSTFLIGHT] Launching post-flight processing...")
-        self._reader.beep_processing()
         self._beeper.start()
 
         try:
             proc = subprocess.Popen(
                 [sys.executable, str(POSTFLIGHT_SCRIPT), "--auto", "--skip-wait"],
                 stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,   # merge stderr into stdout
+                stderr=subprocess.STDOUT,
                 text=True,
-                bufsize=1,                  # line-buffered
+                bufsize=1,
             )
         except Exception as exc:
             log(f"[POSTFLIGHT] Launch failed: {exc}")
-            self._reader.beep_error()
+            self._reader.play_tune(TUNE_ERROR)
             self._beeper.stop()
             with self._lock:
                 self._active = False
             return
 
-        # Monitor in background — never blocks the watchdog loop
-        monitor_thread = threading.Thread(
-            target=self._monitor,
-            args=(proc,),
-            daemon=True,
-        )
+        monitor_thread = threading.Thread(target=self._monitor, args=(proc,), daemon=True)
         monitor_thread.start()
 
-    # ── Internal ──────────────────────────────────────────────────────────────
-
     def _monitor(self, proc: subprocess.Popen) -> None:
-        """Pipe subprocess output to watchdog log, then play finish beep."""
+        """Pipe subprocess output to watchdog log, then play finish tone."""
         try:
-            for line in proc.stdout:
-                stripped = line.rstrip()
-                if stripped:
-                    log(f"[POSTFLIGHT] {stripped}")
+            if proc.stdout is not None:
+                for line in proc.stdout:
+                    stripped = line.rstrip()
+                    if stripped:
+                        log(f"[POSTFLIGHT] {stripped}")
             proc.wait()
         except Exception as exc:
             log(f"[POSTFLIGHT] Log pipe error: {exc}")
@@ -105,10 +87,10 @@ class PostflightMonitor:
 
             if proc.returncode == 0:
                 log("[POSTFLIGHT] Processing complete ✓")
-                self._reader.beep_done()
+                self._reader.play_tune(TUNE_POSTPROCESS_DONE)
             else:
                 log(f"[POSTFLIGHT] Processing failed (exit {proc.returncode})")
-                self._reader.beep_error()
+                self._reader.play_tune(TUNE_ERROR)
 
             with self._lock:
                 self._active = False

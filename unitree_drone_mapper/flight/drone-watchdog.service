@@ -37,11 +37,13 @@ ExecStopPost=/bin/rm -f /tmp/dronepi_mission.lock
 
 # Restart the watchdog if it crashes, but not on a clean stop (e.g. systemctl stop).
 Restart=on-failure
-RestartSec=10
+RestartSec=5
 
 # Allow time for the watchdog to stop Point-LIO and close the bag cleanly
 # before systemd sends SIGKILL. Bag close takes up to 5s (GRACEFUL_KILL_S).
-TimeoutStopSec=15
+TimeoutStopSec=20
+KillSignal=SIGINT
+KillMode=control-group
 
 StandardOutput=journal
 StandardError=journal

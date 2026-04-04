@@ -5,6 +5,7 @@ Description=Point-LIO SLAM Standby — pre-arm map initialisation
 # Point-LIO attempts to open the serial port.
 BindsTo=dev-ttyUSB0.device
 After=dev-ttyUSB0.device
+StopWhenUnneeded=yes
 
 # Also wait for MAVROS so the SLAM bridge can begin publishing vision
 # pose to EKF2 from the moment Point-LIO has a map.
@@ -30,7 +31,7 @@ ExecStart=/bin/bash -c "\
 # Stop the service if the LiDAR USB device is removed.
 # This prevents Point-LIO from spinning with no sensor input
 # and ensures a clean restart when the LiDAR is reconnected.
-StopWhenUnneeded=yes
+
 
 # Restart on failure (e.g. serial port error) but not on clean stop.
 # RestartSec gives the LiDAR firmware time to recover between attempts.
