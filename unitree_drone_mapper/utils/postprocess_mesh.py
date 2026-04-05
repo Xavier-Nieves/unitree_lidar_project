@@ -2,18 +2,25 @@
 """
 postprocess_mesh.py — Post-flight mesh pipeline orchestrator.
 
-Calls each mesh_tools module in sequence to produce a complete
-3D mesh from a ROS 2 LiDAR bag.
+Calls each mesh_tools / texture_tools module in sequence to produce a
+complete textured 3D mesh from a ROS 2 LiDAR + camera bag.
 
 Pipeline
 --------
-1. BagReader          Extract /cloud_registered point cloud from bag
-2. MLSSmoother        Remove IMU noise via Moving Least Squares
-3. GroundClassifier   SMRF classification → ground / non-ground
-4. DTMBuilder         Delaunay 2.5D terrain mesh from ground points
-5. DSMBuilder         Ball Pivoting mesh from non-ground points
-6. MeshMerger         Combine DTM + DSM into single output mesh
-7. Publisher          Save PLYs, metadata.json, latest.json, log flight
+1. BagReader             Extract /cloud_registered point cloud from bag
+2. MLSSmoother           Remove IMU noise via Moving Least Squares
+3. GroundClassifier      SMRF classification → ground / non-ground
+4. DTMBuilder            Delaunay 2.5D terrain mesh from ground points
+5. DSMBuilder            Ball Pivoting mesh from non-ground points
+6. MeshMerger            Combine DTM + DSM into single output mesh
+7. TextureProjectionStage Project IMX477 frames onto mesh vertices (optional)
+8. Publisher             Save PLYs, metadata.json, latest.json, log flight
+
+Stage 7 is skipped when:
+  - --no-texture flag is passed
+  - --no-mesh flag is passed (no mesh to project onto)
+  - /arducam/image_raw topic is absent from the bag
+  - camera.enabled is false in config.yaml
 
 LED / buzzer integration
 ------------------------
@@ -37,6 +44,8 @@ Usage
   python postprocess_mesh.py --bag /mnt/ssd/rosbags/scan_20260319_230358
   python postprocess_mesh.py --bag /path/to/bag --fast --debug
   python postprocess_mesh.py --bag /path/to/bag --no-mls
+  python postprocess_mesh.py --bag /path/to/bag --no-texture
+  python postprocess_mesh.py --bag /path/to/bag --texture-frames 50
 """
 
 import argparse
@@ -79,6 +88,18 @@ CLOUD_CAP_RATE      = _cfg["mesh"]["cloud_cap_rate"]
 CLOUD_CAP_MAX       = _cfg["mesh"]["cloud_cap_max"]
 CLOUD_CAP_RATE_FAST = _cfg["mesh"]["cloud_cap_rate_fast"]
 CLOUD_CAP_MAX_FAST  = _cfg["mesh"]["cloud_cap_max_fast"]
+
+# ── Texture config (from config.yaml camera block, with safe defaults) ────────
+_cam_cfg          = _cfg.get("camera", {})
+_CAMERA_ENABLED   = _cam_cfg.get("enabled", True)   # default True — camera is present
+_IMAGE_TOPIC      = _cam_cfg.get("image_topic",  "/arducam/image_raw")
+_POSE_TOPIC       = _cfg.get("slam", {}).get("pose_topic", "/aft_mapped_to_init")
+_CALIB_PATH       = (
+    Path(__file__).resolve().parents[2]
+    / "unitree_drone_mapper"
+    / "config"
+    / "camera_calibration.yaml"
+)
 
 
 # ── Poisson (optional legacy path) ────────────────────────────────────────────
@@ -155,19 +176,132 @@ def resolve_maps_dir(args_maps_dir: str, bag_path: Path) -> Path:
     return fallback
 
 
+# ── Texture helpers ───────────────────────────────────────────────────────────
+
+def _bag_has_topic(bag_path: Path, topic: str) -> bool:
+    """
+    Check whether a topic exists in the bag without reading any messages.
+
+    Uses rosbags Reader metadata only — no message deserialisation.
+    Returns False on any error so callers can skip texture gracefully.
+    """
+    try:
+        from rosbags.rosbag2 import Reader
+        with Reader(str(bag_path)) as r:
+            return any(c.topic == topic for c in r.connections)
+    except Exception:
+        return False
+
+
+def _should_run_texture(args, bag_path: Path, has_mesh: bool) -> tuple[bool, str]:
+    """
+    Decide whether Stage 7 should run and return (run: bool, reason: str).
+
+    Checks in order:
+      1. --no-texture flag
+      2. --no-mesh flag (nothing to project onto)
+      3. camera.enabled in config.yaml
+      4. image topic present in bag
+      5. calibration file exists
+    """
+    if args.no_texture:
+        return False, "--no-texture flag"
+    if not has_mesh:
+        return False, "--no-mesh (no mesh to project onto)"
+    if not _CAMERA_ENABLED:
+        return False, "camera.enabled=false in config.yaml"
+    if not _bag_has_topic(bag_path, _IMAGE_TOPIC):
+        return False, f"topic '{_IMAGE_TOPIC}' not found in bag"
+    if not _CALIB_PATH.exists():
+        return False, f"calibration file not found: {_CALIB_PATH}"
+    return True, "all checks passed"
+
+
+# ── Stage 7 — texture projection ─────────────────────────────────────────────
+
+def run_texture_stage(
+    mesh,
+    bag_path:    Path,
+    max_frames:  int | None,
+    fast:        bool,
+) -> bool:
+    """
+    Run TextureProjectionStage (Stage 7) and write vertex colours onto mesh.
+
+    The stage modifies mesh.vertex_colors in-place and also writes
+    textured_mesh.ply to the bag directory for inspection before the
+    Publisher copies it to maps_dir.
+
+    Parameters
+    ----------
+    mesh        : open3d.geometry.TriangleMesh  (from Stage 6)
+    bag_path    : Path to the rosbag2 directory
+    max_frames  : cap on camera frames processed (None = all)
+                  fast mode uses 30 frames to keep runtime under ~60 s on Pi 5
+    fast        : if True, reduce max_frames to 30 unless explicitly set
+
+    Returns
+    -------
+    bool — True if projection succeeded, False on any exception.
+           Failure here does NOT abort the pipeline; the grey mesh is
+           still published as a fallback.
+    """
+    try:
+        from texture_tools.texture_stage import TextureProjectionStage
+
+        # In fast mode cap frames to 30 unless the user explicitly set more
+        if fast and max_frames is None:
+            max_frames = 30
+            print(f"  [Texture] Fast mode — capping to {max_frames} frames")
+
+        stage = TextureProjectionStage(
+            calibration_path = _CALIB_PATH,
+            use_distortion   = False,   # negligible at survey altitudes
+            angle_weighting  = False,   # uniform weight — faster on Pi 5
+            max_frames       = max_frames,
+            save_output      = True,    # writes textured_mesh.ply to bag dir
+        )
+
+        stage.project(
+            mesh        = mesh,
+            bag_path    = bag_path,
+            pose_topic  = _POSE_TOPIC,
+            image_topic = _IMAGE_TOPIC,
+        )
+        return True
+
+    except ImportError as exc:
+        print(
+            f"  [Texture] SKIP — texture_tools not importable: {exc}\n"
+            f"           Check that utils/texture_tools/ is on sys.path.",
+            file=sys.stderr,
+        )
+        return False
+
+    except Exception as exc:
+        print(
+            f"  [Texture] FAILED — {exc}\n"
+            f"           Continuing with untextured mesh.",
+            file=sys.stderr,
+        )
+        traceback.print_exc()
+        return False
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
     default_maps = str(MAPS_DIR) if MAPS_DIR else "auto"
 
     parser = argparse.ArgumentParser(description="DronePi post-flight mesh pipeline.")
-    parser.add_argument("--bag",              required=True,       help="Path to bag directory")
-    parser.add_argument("--maps-dir",         default=default_maps,help="Maps output directory")
-    parser.add_argument("--fast",             action="store_true", help="Fast mode: skip MLS, aggressive downsampling")
-    parser.add_argument("--debug",            action="store_true", help="Save intermediate PLY files to debug/")
-    parser.add_argument("--no-mls",           action="store_true", help="Skip MLS smoothing")
-    parser.add_argument("--no-mesh",          action="store_true", help="Cloud only — skip all meshing")
-    parser.add_argument("--use-poisson",      action="store_true", help="Use legacy Poisson instead of DTM+DSM")
+    parser.add_argument("--bag",              required=True,        help="Path to bag directory")
+    parser.add_argument("--maps-dir",         default=default_maps, help="Maps output directory")
+    parser.add_argument("--fast",             action="store_true",  help="Fast mode: skip MLS, aggressive downsampling, cap texture frames")
+    parser.add_argument("--debug",            action="store_true",  help="Save intermediate PLY files to debug/")
+    parser.add_argument("--no-mls",           action="store_true",  help="Skip MLS smoothing")
+    parser.add_argument("--no-mesh",          action="store_true",  help="Cloud only — skip all meshing")
+    parser.add_argument("--no-texture",       action="store_true",  help="Skip Stage 7 texture projection")
+    parser.add_argument("--use-poisson",      action="store_true",  help="Use legacy Poisson instead of DTM+DSM")
     parser.add_argument("--poisson-depth",    type=int,  default=None)
     parser.add_argument("--grid-res",         type=float, default=0.10)
     parser.add_argument("--mls-radius",       type=float, default=0.05)
@@ -176,8 +310,11 @@ def main():
     parser.add_argument("--ground-height",    type=float, default=None)
     parser.add_argument("--ground-threshold", type=float, default=0.5)
     parser.add_argument("--ground-cell-size", type=float, default=1.0)
-    parser.add_argument("--max-frames",       type=int,  default=None)
-    parser.add_argument("--auto",             action="store_true", help="Non-interactive mode")
+    parser.add_argument("--max-frames",       type=int,  default=None,
+                        help="Max LiDAR frames to read from bag")
+    parser.add_argument("--texture-frames",   type=int,  default=None,
+                        help="Max camera frames for texture projection (default: all, fast: 30)")
+    parser.add_argument("--auto",             action="store_true",  help="Non-interactive mode")
     parser.add_argument("--min-points",       type=int,  default=None)
     args = parser.parse_args()
 
@@ -197,8 +334,6 @@ def main():
     pf_ipc  = PostflightIPC()
 
     # Signal to LED service that the pipeline is now running.
-    # Stage name matches PipelineStage.INIT so the LED transitions to
-    # POSTFLIGHT_RUNNING (yellow 1 Hz blink) immediately.
     pf_ipc.update(PipelineStage.INIT.value)
 
     current_stage = PipelineStage.INIT
@@ -207,12 +342,20 @@ def main():
     bpa_cap  = args.max_bpa_pts or (50_000 if args.fast else 80_000)
     grid_res = args.grid_res * 2 if args.fast else args.grid_res
 
+    # Determine whether texture stage will run (pre-flight check, fast path)
+    # Full validation happens inside _should_run_texture after mesh is built.
+    has_mesh     = not args.no_mesh
+    texture_mode = "skipped (--no-texture)" if args.no_texture else (
+                   "skipped (--no-mesh)"    if not has_mesh    else
+                   "enabled (fast: 30 frames max)" if args.fast else
+                   f"enabled ({args.texture_frames or 'all'} frames)")
+
     print("=" * 60)
     print("  DronePi Post-Flight Mesh Pipeline")
     print(f"  Session  : {session_id}")
     print(f"  Maps dir : {maps_dir}")
-    if args.debug: print("  *** DEBUG MODE ***")
-    if args.fast:  print("  *** FAST MODE ***")
+    if args.debug:   print("  *** DEBUG MODE ***")
+    if args.fast:    print("  *** FAST MODE ***")
     mode = ("cloud only" if args.no_mesh
             else "Poisson" if args.use_poisson
             else "DTM + DSM")
@@ -221,13 +364,14 @@ def main():
     if not args.use_poisson and not args.no_mesh:
         print(f"  Grid res : {grid_res}m")
         print(f"  BPA cap  : {bpa_cap:,}")
+    print(f"  Texture  : {texture_mode}")
     print("=" * 60)
 
     try:
         # ── [1] Extract ───────────────────────────────────────────────────────
         current_stage = PipelineStage.BAG_EXTRACT
         pf_ipc.update(current_stage.value)
-        print(f"\n[1/6] Extracting point cloud from bag...")
+        print(f"\n[1/7] Extracting point cloud from bag...")
         reader  = BagReader(bag_path, max_frames=args.max_frames)
         pts_raw = reader.extract()
         meta    = reader.metadata
@@ -264,9 +408,9 @@ def main():
         pf_ipc.update(current_stage.value)
         if skip_mls:
             reason = "--fast" if args.fast else "--no-mls"
-            print(f"\n[2/6] MLS skipped ({reason})")
+            print(f"\n[2/7] MLS skipped ({reason})")
         else:
-            print(f"\n[2/6] MLS smoothing...")
+            print(f"\n[2/7] MLS smoothing...")
             smoother = MLSSmoother(radius=args.mls_radius)
             pts      = smoother.smooth(pts)
             debug.save_cloud(pts, "mls")
@@ -277,10 +421,10 @@ def main():
         dsm_mesh_out = None
 
         if args.no_mesh:
-            print(f"\n[3-5/6] Meshing skipped (--no-mesh)")
+            print(f"\n[3-5/7] Meshing skipped (--no-mesh)")
 
         elif args.use_poisson:
-            print(f"\n[3-5/6] Running Poisson reconstruction...")
+            print(f"\n[3-5/7] Running Poisson reconstruction...")
             raw_mesh   = run_poisson(pts, depth=args.poisson_depth)
             merger     = MeshMerger()
             final_mesh = merger.wrap_poisson(raw_mesh)
@@ -289,7 +433,7 @@ def main():
             # ── [3] Ground classification ─────────────────────────────────────
             current_stage = PipelineStage.GROUND_CLASSIFY
             pf_ipc.update(current_stage.value)
-            print(f"\n[3/6] Ground classification...")
+            print(f"\n[3/7] Ground classification...")
 
             if args.ground_height is not None:
                 print(f"  [GroundClassifier] Manual threshold: Z ≤ {args.ground_height}m")
@@ -313,7 +457,7 @@ def main():
             # ── [4] DTM ───────────────────────────────────────────────────────
             current_stage = PipelineStage.DTM
             pf_ipc.update(current_stage.value)
-            print(f"\n[4/6] Building DTM (Delaunay 2.5D)...")
+            print(f"\n[4/7] Building DTM (Delaunay 2.5D)...")
             dtm_builder  = DTMBuilder(grid_res=grid_res)
             dtm_mesh     = dtm_builder.build(ground_pts)
             dtm_mesh_out = dtm_mesh
@@ -322,7 +466,7 @@ def main():
             # ── [5] DSM ───────────────────────────────────────────────────────
             current_stage = PipelineStage.DSM
             pf_ipc.update(current_stage.value)
-            print(f"\n[5/6] Building DSM (Ball Pivoting)...")
+            print(f"\n[5/7] Building DSM (Ball Pivoting)...")
             dsm_builder  = DSMBuilder(
                 radius=args.bpa_radius, fast=args.fast, max_pts=args.max_bpa_pts)
             dsm_mesh     = dsm_builder.build(nonground_pts)
@@ -332,15 +476,43 @@ def main():
             # ── [5b] Merge ────────────────────────────────────────────────────
             current_stage = PipelineStage.MERGE
             pf_ipc.update(current_stage.value)
-            print(f"\n[5b] Merging DTM + DSM...")
+            print(f"\n[5b/7] Merging DTM + DSM...")
             merger     = MeshMerger()
             final_mesh = merger.merge(dtm_mesh, dsm_mesh)
 
-        # ── [6] Publish ───────────────────────────────────────────────────────
+        # ── [6] Texture projection ────────────────────────────────────────────
+        # Runs only when a mesh was produced and all preconditions are met.
+        # Failure here is non-fatal — the grey mesh is still published.
+        texture_ok = False
+        run_tex, tex_reason = _should_run_texture(args, bag_path, has_mesh=(final_mesh is not None))
+
+        if run_tex:
+            current_stage = PipelineStage.TEXTURE
+            pf_ipc.update(current_stage.value)
+            print(f"\n[6/7] Texture projection...")
+            print(f"  [Texture] Calibration : {_CALIB_PATH.name}")
+            print(f"  [Texture] Image topic : {_IMAGE_TOPIC}")
+            print(f"  [Texture] Pose topic  : {_POSE_TOPIC}")
+
+            texture_ok = run_texture_stage(
+                mesh        = final_mesh,
+                bag_path    = bag_path,
+                max_frames  = args.texture_frames,
+                fast        = args.fast,
+            )
+
+            if texture_ok:
+                print(f"  [Texture] Stage 6 complete — mesh has vertex colours")
+            else:
+                print(f"  [Texture] Stage 6 failed — publishing grey mesh as fallback")
+        else:
+            print(f"\n[6/7] Texture projection skipped — {tex_reason}")
+
+        # ── [7] Publish ───────────────────────────────────────────────────────
         current_stage = PipelineStage.PUBLISH
         pf_ipc.update(current_stage.value)
         elapsed = time.time() - t_start
-        print(f"\n[6/6] Publishing outputs...")
+        print(f"\n[7/7] Publishing outputs...")
         pub = Publisher(maps_dir=maps_dir)
         pub.publish(
             mesh       = final_mesh,
@@ -369,13 +541,19 @@ def main():
     total = time.time() - t_start
     print(f"\n{'='*60}")
     print(f"  Done in {total:.1f}s")
-    print(f"  Cloud : {len(pts):,} points")
+    print(f"  Cloud   : {len(pts):,} points")
     if final_mesh is not None:
-        print(f"  Mesh  : {len(final_mesh.faces):,} faces")
-    if MAPS_DIR is not None:
-        print(f"  Viewer: http://10.42.0.1:8080/meshview.html")
+        print(f"  Mesh    : {len(final_mesh.faces):,} faces")
+    if texture_ok:
+        print(f"  Texture : applied ({args.texture_frames or 'all'} frames processed)")
+    elif run_tex:
+        print(f"  Texture : FAILED — grey mesh published as fallback")
     else:
-        print(f"  Output: {maps_dir}")
+        print(f"  Texture : skipped ({tex_reason})")
+    if MAPS_DIR is not None:
+        print(f"  Viewer  : http://10.42.0.1:8080/meshview.html")
+    else:
+        print(f"  Output  : {maps_dir}")
     print(f"{'='*60}")
 
 

@@ -41,6 +41,7 @@ class PipelineStage(Enum):
     DTM             = "dtm"
     DSM             = "dsm"
     MERGE           = "merge"
+    TEXTURE         = "texture"        # Stage 6 — IMX477 projection onto mesh
     PUBLISH         = "publish"
     COMPLETE        = "complete"
 
