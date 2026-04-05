@@ -21,6 +21,10 @@ lidar:
 imu:
   source: lidar_internal        # L1 has built-in IMU
 
+# Camera runtime settings only.
+# Intrinsics (fx/fy/cx/cy/dist_coeffs) and extrinsics are the sole
+# responsibility of config/camera_calibration.yaml.  Do NOT duplicate
+# those values here — camera_model.py reads only that file.
 camera:
   model: imx477                 # Arducam IMX477 (HQ camera)
   type: perspective
@@ -28,10 +32,7 @@ camera:
   capture_interval_s: 10.0
   resolution: [4056, 3040]
   jpeg_quality: 90
-  fx: 2435.0
-  fy: 2435.0
-  cx: 2028.0
-  cy: 1520.0
+  calibration_file: config/camera_calibration.yaml
 
 px4:
   connection: /dev/ttyACM0
@@ -74,10 +75,10 @@ mesh:
   min_points_to_process: 50000
 
 dsm:
-  DEFAULT_MAX_PTS:       80000   
-  DEFAULT_MAX_PTS_FAST:  50000   
-  MIN_RADIUS:            0.03    
-  MAX_RADIUS :           0.50    
+  DEFAULT_MAX_PTS:       80000
+  DEFAULT_MAX_PTS_FAST:  50000
+  MIN_RADIUS:            0.03
+  MAX_RADIUS:            0.50
 
 # ── HTTP server (rpi_server/serve.py) ─────────────────────────────────────────
 server:
@@ -105,7 +106,10 @@ mapping:
   output_formats: [ply]
 
 # ── Calibration ───────────────────────────────────────────────────────────────
+# Authoritative values live in config/camera_calibration.yaml.
+# This block is kept for reference only and must stay in sync with that file.
+# camera_model.py does NOT read from here — it reads camera_calibration.yaml.
 calibration:
   lidar_to_camera:
-    translation: [0.0, 0.0, 0.05]
-    rotation: [0.0, 0.0, 0.0]
+    translation: [-0.070, 0.000, 0.030]   # x behind, y centre, z above (metres)
+    rotation: [0.0, 0.0, 0.0]             # roll/pitch/yaw radians — aligned mount
