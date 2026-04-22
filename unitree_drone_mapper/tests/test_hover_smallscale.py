@@ -41,7 +41,6 @@ Safety
 from __future__ import annotations
 
 import argparse
-import json
 import math
 import os
 import sys
@@ -57,6 +56,7 @@ sys.path.insert(0, str(_MAPPER_DIR))
 
 from flight.safe_flight_mixin import (
     SafeFlightMixin,
+    CONTEXT_TEST,
     MISSION_LOCK,
     BAG_TOPICS_REQUIRED,
     ROS_SETUP,
@@ -100,10 +100,12 @@ class HoverSmallScaleNode(SafeFlightMixin):
         self._rclpy  = rclpy
 
         # Initialise SafeFlightMixin FIRST
+        # context defaults to CONTEXT_TEST — correct for all test scripts.
+        # TTY death detection is not implemented; deployment model is RC-triggered.
         SafeFlightMixin.__init__(
             self,
             script_name=__file__,
-            headless=args.headless,
+            context=CONTEXT_TEST,
         )
 
         rclpy.init()
@@ -124,7 +126,9 @@ class HoverSmallScaleNode(SafeFlightMixin):
         self._state_cb_lock = threading.Lock()
         self._fcu_state   = None
         self._local_pose  = None
-        self._rc_channels: list[int] = []
+        # Note: RC channels are cached in self._last_rc_channels (SafeFlightMixin)
+        # by the RC kill monitor. _on_rc here keeps that field current for
+        # get_rc_ch() calls in the kill switch test.
 
         # Subscriptions
         self._node.create_subscription(
@@ -168,8 +172,10 @@ class HoverSmallScaleNode(SafeFlightMixin):
             self._last_pose_z = msg.pose.position.z
 
     def _on_rc(self, msg) -> None:
-        with self._state_cb_lock:
-            self._rc_channels = list(msg.channels)
+        # Write to mixin's _last_rc_channels (under mixin's _state_lock)
+        # so get_rc_ch() and the mixin's RC activity detector share one source.
+        with self._state_lock:
+            self._last_rc_channels = list(msg.channels)
 
     # ── State helpers ──────────────────────────────────────────────────────────
 
@@ -195,10 +201,10 @@ class HoverSmallScaleNode(SafeFlightMixin):
             return self._local_pose.pose.position.z
 
     def get_rc_ch(self, ch_1indexed: int) -> int:
-        with self._state_cb_lock:
+        with self._state_lock:
             idx = ch_1indexed - 1
-            if idx < len(self._rc_channels):
-                return self._rc_channels[idx]
+            if idx < len(self._last_rc_channels):
+                return self._last_rc_channels[idx]
             return 0
 
     # ── Setpoint ───────────────────────────────────────────────────────────────
@@ -653,22 +659,7 @@ def main() -> None:
         "--skip-kill-test", action="store_true",
         help="Skip RC kill switch pre-arm test (NOT recommended for first flight)",
     )
-    parser.add_argument(
-        "--headless", action="store_true",
-        help="Disable TTY check (for tmux / no-SSH deployments)",
-    )
     args = parser.parse_args()
-
-    # Write bench_scan lock so watchdog yields
-    MISSION_LOCK.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        MISSION_LOCK.write_text(
-            json.dumps({"mode": "bench_scan",
-                        "started_at": datetime.now().isoformat()})
-        )
-        print(f"  [Lock] bench_scan written → {MISSION_LOCK}")
-    except Exception as e:
-        print(f"  [WARN] Could not write mission lock: {e}")
 
     if not args.dry_run:
         print("\n  *** LIVE FLIGHT — PROPS ON ***")
