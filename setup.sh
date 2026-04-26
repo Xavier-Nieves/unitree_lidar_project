@@ -4,30 +4,36 @@
 # Fresh Ubuntu 24.04 (arm64) on Raspberry Pi 5 → fully operational
 #
 # Usage:
-#   sudo bash scripts/setup.sh
+#   sudo bash setup_scripts/setup.sh
 #
 # What this does (in order):
-#   [1]  System update + base build tools
+#   [1]  System update + base build tools + gdal-bin + cv-bridge
 #   [2]  ROS 2 Jazzy (native)
-#   [3]  MAVROS
+#   [3]  MAVROS + foxglove-bridge + cv-bridge ROS package
 #   [4]  Unitree L1 LiDAR driver + colcon symlink fix
 #   [5]  Point-LIO SLAM
 #   [6]  Miniforge (Conda) + dronepi environment + all Python deps
-#   [7]  udev rules (ttyPixhawk, ttyUSB0)
+#   [7]  udev rules (ttyPixhawk, ttyUSB0, Hailo group)
 #   [8]  Build ROS 2 workspace
 #   [9]  CPU governor → performance
 #   [10] Systemd services (hotspot, mesh-server, foxglove, mavros,
-#         drone-watchdog, dronepi-main)
+#         drone-watchdog, dronepi-main, pointlio-standby,
+#         slam-bridge, rpi-health)
 #
 # Run as root (sudo). The script will not proceed without it.
 # Re-running is safe — each step checks before acting.
+#
+# Excluded (run separately if needed):
+#   Hailo hailo_inference_env  →  requires hailort wheel from developer.hailo.ai
+#   Foxglove Agent             →  requires FOXGLOVE_DEVICE_TOKEN; run install_foxglove_agent.sh
+#   SSD /etc/fstab entry       →  UUID is hardware-specific; add manually
 # =============================================================================
 
 set -euo pipefail
 
 # ── Guards ────────────────────────────────────────────────────────────────────
 if [[ $EUID -ne 0 ]]; then
-    echo "[ERROR] Run with sudo: sudo bash scripts/setup.sh"
+    echo "[ERROR] Run with sudo: sudo bash setup_scripts/setup.sh"
     exit 1
 fi
 
@@ -40,6 +46,8 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 ROS2_WS="$PROJECT_DIR/RPI5/ros2_ws"
+FLIGHT_DIR="$PROJECT_DIR/unitree_drone_mapper/flight"
+RPI_SERVER_DIR="$PROJECT_DIR/rpi_server"
 DRONEPI_USER="dronepi"
 DRONEPI_HOME="/home/$DRONEPI_USER"
 CONDA_PREFIX="$DRONEPI_HOME/miniforge3"
@@ -88,7 +96,8 @@ apt-get install -y -qq \
     can-utils \
     net-tools \
     htop \
-    rsync
+    rsync \
+    gdal-bin
 
 ok "Base tools installed"
 
@@ -128,9 +137,9 @@ http://packages.ros.org/ros2/ubuntu $(. /etc/os-release && echo "$UBUNTU_CODENAM
 fi
 
 # =============================================================================
-# [3] MAVROS
+# [3] MAVROS + foxglove-bridge + cv-bridge
 # =============================================================================
-step "3/10" "MAVROS"
+step "3/10" "MAVROS + foxglove-bridge + cv-bridge"
 
 if dpkg -l ros-jazzy-mavros &>/dev/null; then
     skip "ros-jazzy-mavros already installed"
@@ -140,19 +149,25 @@ else
         ros-jazzy-mavros-msgs \
         ros-jazzy-mavros-extras
 
-    # Install GeographicLib datasets (required by MAVROS)
+    # GeographicLib datasets — required by MAVROS EKF fusion
     /opt/ros/jazzy/lib/mavros/install_geographiclib_datasets.sh || \
-        warn "GeographicLib install failed — run manually if MAVROS fails to start"
+        warn "GeographicLib install failed — run manually: /opt/ros/jazzy/lib/mavros/install_geographiclib_datasets.sh"
 
     ok "MAVROS installed"
 fi
 
-# foxglove bridge
 if dpkg -l ros-jazzy-foxglove-bridge &>/dev/null; then
     skip "foxglove-bridge already installed"
 else
     apt-get install -y -qq ros-jazzy-foxglove-bridge
     ok "foxglove-bridge installed"
+fi
+
+if dpkg -l ros-jazzy-cv-bridge &>/dev/null; then
+    skip "ros-jazzy-cv-bridge already installed"
+else
+    apt-get install -y -qq ros-jazzy-cv-bridge python3-cv-bridge
+    ok "cv-bridge installed"
 fi
 
 # =============================================================================
@@ -174,12 +189,10 @@ else
 fi
 
 # Colcon symlink fix — package.xml is nested two levels deep inside the SDK.
-# Without this symlink colcon never discovers the package and the binary
-# never gets built. This was the root cause of the historical serial timeout.
 PACKAGE_DEEP="$UNILIDAR_DEST/unitree_lidar_ros2/src/unitree_lidar_ros2"
 if [[ ! -L "$UNILIDAR_LINK" ]]; then
     sudo -u "$DRONEPI_USER" ln -s "$PACKAGE_DEEP" "$UNILIDAR_LINK"
-    ok "colcon symlink created at correct discovery depth"
+    ok "colcon symlink created"
 else
     skip "colcon symlink already exists"
 fi
@@ -229,17 +242,18 @@ else
     skip "dronepi Conda environment already exists"
 fi
 
-# Install conda-forge packages
-echo "  Installing conda-forge packages (open3d, pdal)..."
+# conda-forge packages (no aarch64 pip wheels for these)
+echo "  Installing conda-forge packages..."
 sudo -u "$DRONEPI_USER" "$CONDA_BIN" install -n "$CONDA_ENV" -y -q \
     -c conda-forge \
     "open3d>=0.19" \
     "pdal>=3.5" \
+    pymeshlab \
     numpy scipy pyyaml psutil
 
 ok "conda-forge packages installed"
 
-# Install pip packages inside the Conda env
+# pip packages inside the Conda env
 # empy must be pinned to 3.3.4 — ROS 2 Jazzy requires the legacy em module
 # API that was removed in empy 4.x. Installing any newer version breaks colcon.
 echo "  Installing pip packages inside dronepi env..."
@@ -253,9 +267,13 @@ $CONDA_RUN pip install -q \
     osrf-pycommon \
     trimesh \
     rosbags \
-    pymeshlab \
     websocket-client \
-    rpi-lgpio
+    websockets \
+    rpi-lgpio \
+    picamera2 \
+    piexif \
+    "opencv-python-headless>=4.9" \
+    "Pillow>=10.0"
 
 ok "pip packages installed inside dronepi env"
 
@@ -265,10 +283,12 @@ CONDA_INIT_LINE="source $CONDA_PREFIX/etc/profile.d/conda.sh"
 CONDA_ACTIVATE_LINE="conda activate $CONDA_ENV"
 
 if ! grep -qF "$CONDA_INIT_LINE" "$BASHRC" 2>/dev/null; then
-    echo "" >> "$BASHRC"
-    echo "# Conda — added by DronePi setup" >> "$BASHRC"
-    echo "$CONDA_INIT_LINE" >> "$BASHRC"
-    echo "$CONDA_ACTIVATE_LINE" >> "$BASHRC"
+    {
+        echo ""
+        echo "# Conda — added by DronePi setup"
+        echo "$CONDA_INIT_LINE"
+        echo "$CONDA_ACTIVATE_LINE"
+    } >> "$BASHRC"
     chown "$DRONEPI_USER:$DRONEPI_USER" "$BASHRC"
     ok "Conda activate added to .bashrc"
 else
@@ -292,21 +312,25 @@ step "7/10" "udev rules"
 
 UDEV_FILE="/etc/udev/rules.d/99-dronepi.rules"
 
-# Write rules whether or not the file exists to ensure they are current
 tee "$UDEV_FILE" > /dev/null <<'EOF'
 # Pixhawk 6X — persistent symlink at /dev/ttyPixhawk
-# Matches any USB CDC ACM device. Refine ATTRS{idVendor} if needed.
 SUBSYSTEM=="tty", KERNEL=="ttyACM*", MODE="0666", GROUP="dialout", SYMLINK+="ttyPixhawk"
 
-# Unitree L1 LiDAR — CP210x USB-to-UART
-SUBSYSTEM=="tty", KERNEL=="ttyUSB*", ATTRS{idVendor}=="10c4", MODE="0666", GROUP="dialout"
+# Unitree L1 LiDAR — CP210x USB-to-UART (Silicon Labs, 10c4:ea60)
+SUBSYSTEM=="tty", KERNEL=="ttyUSB*", ATTRS{idVendor}=="10c4", MODE="0666", GROUP="dialout", \
+    SYMLINK+="ttyLidar", TAG+="systemd", ENV{SYSTEMD_WANTS}="pointlio-standby.service"
+
+# Hailo-8 PCIe AI HAT — allow dronepi user read access without root
+SUBSYSTEM=="hailo_chardev", MODE="0660", GROUP="hailo"
 EOF
 
 udevadm control --reload-rules
 udevadm trigger
 
-# Add user to dialout
+# Groups
 usermod -aG dialout "$DRONEPI_USER"
+groupadd -f hailo
+usermod -aG hailo "$DRONEPI_USER"
 
 ok "udev rules written and reloaded"
 
@@ -320,7 +344,6 @@ chown -R "$DRONEPI_USER:$DRONEPI_USER" "$ROS2_WS"
 
 # Build inside the dronepi Conda env so colcon uses the correct Python
 # with catkin_pkg, empy==3.3.4, and colcon-ros already installed.
-echo "  Building packages (this takes a few minutes on Pi 5)..."
 sudo -u "$DRONEPI_USER" bash -c "
     source $CONDA_PREFIX/etc/profile.d/conda.sh
     conda activate $CONDA_ENV
@@ -328,28 +351,22 @@ sudo -u "$DRONEPI_USER" bash -c "
     cd $ROS2_WS
     colcon build \
         --symlink-install \
-        --packages-select unitree_lidar_ros2 point_lio \
         --cmake-args -DCMAKE_BUILD_TYPE=Release \
-        --event-handlers console_direct+
+        2>&1 | tail -20
 "
-
 ok "ROS 2 workspace built"
 
 # =============================================================================
-# [9] CPU governor
+# [9] CPU governor → performance
 # =============================================================================
-step "9/10" "CPU governor → performance"
+step "9/10" "CPU governor"
 
 if [[ -f /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor ]]; then
     echo performance | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor > /dev/null
-
-    # Persist across reboots via rc.local
     RC_LOCAL="/etc/rc.local"
-    GOV_LINE='echo performance | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor > /dev/null'
+    GOV_LINE="echo performance | tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor > /dev/null"
     if [[ ! -f "$RC_LOCAL" ]]; then
-        echo '#!/bin/bash' > "$RC_LOCAL"
-        echo "$GOV_LINE" >> "$RC_LOCAL"
-        echo "exit 0" >> "$RC_LOCAL"
+        printf '#!/bin/bash\n%s\nexit 0\n' "$GOV_LINE" > "$RC_LOCAL"
         chmod +x "$RC_LOCAL"
     elif ! grep -qF "$GOV_LINE" "$RC_LOCAL"; then
         sed -i "/^exit 0/i $GOV_LINE" "$RC_LOCAL"
@@ -378,6 +395,7 @@ run_sub() {
     fi
 }
 
+# Sub-scripts that write their own service files
 run_sub "setup_hotspot_service.sh"      "dronepi-hotspot service"
 run_sub "setup_mesh_server_service.sh"  "drone-mesh-server service"
 run_sub "setup_foxglove_service.sh"     "foxglove-bridge service"
@@ -385,19 +403,56 @@ run_sub "setup_mavros_service.sh"       "mavros service"
 run_sub "setup_watchdog_service.sh"     "drone-watchdog service"
 run_sub "setup_main_service.sh"         "dronepi-main service"
 
-# Reload daemon and enable all
+# ── Services whose .service files live in the flight directory ────────────────
+# These are copied directly from source rather than having their own sub-script.
+
+install_service() {
+    local name="$1"
+    local src="$2"
+    local dst="/etc/systemd/system/${name}.service"
+    if [[ -f "$src" ]]; then
+        cp "$src" "$dst"
+        ok "${name}.service installed"
+    else
+        warn "${name}.service not found at $src — skipping"
+    fi
+}
+
+install_service "pointlio-standby" "$FLIGHT_DIR/pointlio-standby.service"
+install_service "slam-bridge"      "$FLIGHT_DIR/slam-bridge.service"
+
+# ── rpi-health: copy service file and set script permissions ──────────────────
+RPI_HEALTH_SERVICE="$RPI_SERVER_DIR/rpi-health.service"
+if [[ -f "$RPI_HEALTH_SERVICE" ]]; then
+    cp "$RPI_HEALTH_SERVICE" "/etc/systemd/system/rpi-health.service"
+    chown "$DRONEPI_USER:$DRONEPI_USER" "$RPI_SERVER_DIR/rpi_health_node.py" 2>/dev/null || true
+    chmod 755 "$RPI_SERVER_DIR/rpi_health_node.py" 2>/dev/null || true
+    ok "rpi-health.service installed"
+else
+    warn "rpi-health.service not found at $RPI_HEALTH_SERVICE — skipping"
+fi
+
+# ── Reload daemon and enable all services ─────────────────────────────────────
 systemctl daemon-reload
+
 for svc in \
     dronepi-hotspot \
     drone-mesh-server \
     foxglove-bridge \
     mavros \
     drone-watchdog \
-    dronepi-main; do
+    dronepi-main \
+    slam-bridge \
+    rpi-health; do
     if systemctl list-unit-files "${svc}.service" &>/dev/null; then
         systemctl enable "${svc}.service" 2>/dev/null || true
     fi
 done
+
+# pointlio-standby is triggered by udev (WantedBy=dev-ttyUSB0.device), not boot
+if systemctl list-unit-files "pointlio-standby.service" &>/dev/null; then
+    systemctl enable "pointlio-standby.service" 2>/dev/null || true
+fi
 
 ok "All services enabled"
 
@@ -413,15 +468,21 @@ echo -e "${NC}"
 echo "  Next steps (do these in order):"
 echo ""
 echo "  1. Log out and back in (group membership takes effect)"
-echo "  2. Connect SSD and confirm:  lsblk && df -h /mnt/ssd"
-echo "  3. Verify udev symlinks:     ls -l /dev/ttyPixhawk"
-echo "  4. Source environment:       source ~/.bashrc"
-echo "  5. Run preflight check:      bash preflight_check.sh"
-echo "  6. Reboot for services:      sudo reboot"
+echo "  2. Verify udev symlinks:     ls -l /dev/ttyPixhawk"
+echo "  3. Source environment:       source ~/.bashrc"
+echo "  4. Run preflight check:      bash setup_scripts/preflight_check.sh"
+echo "  5. Reboot for services:      sudo reboot"
 echo ""
-echo "  After reboot:"
-echo "    Check all services:  systemctl status mavros drone-watchdog \\"
-echo "                           drone-mesh-server foxglove-bridge"
-echo "    Run bench test:      python3 utils/bench_test.py"
-echo "    Open viewer:         http://10.42.0.1:8080/meshview.html"
+echo "  After reboot, verify all services:"
+echo "    sudo systemctl status mavros drone-watchdog slam-bridge \\"
+echo "      pointlio-standby foxglove-bridge drone-mesh-server rpi-health"
+echo ""
+echo "  If SSD not yet configured:"
+echo "    sudo blkid | grep -i ssd"
+echo "    # Add:  UUID=<uuid>  /mnt/ssd  exfat  defaults,nofail  0  0"
+echo "    # to /etc/fstab, then: sudo mkdir -p /mnt/ssd && sudo mount -a"
+echo ""
+echo "  Optional (run separately when ready):"
+echo "    Foxglove Agent:  FOXGLOVE_DEVICE_TOKEN=fox_dt_... bash setup_scripts/install_foxglove_agent.sh"
+echo "    Hailo venv:      see docs/hardware_setup.md — requires hailort wheel from developer.hailo.ai"
 echo ""

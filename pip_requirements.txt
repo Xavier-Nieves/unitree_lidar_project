@@ -1,12 +1,12 @@
 # DronePi Python requirements
 # For CI and laptop development (no conda, no hardware).
-# On the Pi use environment.yml instead — it includes open3d and pdal
-# from conda-forge which have no aarch64 pip wheels.
+# On the Pi use the dronepi conda environment instead — open3d, pdal, and
+# pymeshlab have no aarch64 pip wheels and must come from conda-forge.
 #
 # Install: pip install -r requirements.txt
-#
+
 # ── ROS 2 / colcon ────────────────────────────────────────────────────────────
-# NOTE: empy MUST be pinned to 3.3.4
+# empy MUST be pinned to 3.3.4.
 # ROS 2 Jazzy uses the legacy `import em` API removed in empy 4.x.
 # Installing any newer version silently breaks colcon builds.
 empy==3.3.4
@@ -15,32 +15,57 @@ lark
 colcon-common-extensions
 colcon-ros
 osrf-pycommon
+rosdep
 
-# ── Point cloud / mesh (CI-safe, x86 pip wheels available) ───────────────────
+# ── Numerics / general ────────────────────────────────────────────────────────
 numpy>=1.26
 scipy>=1.12
-trimesh>=4.0
 pyyaml>=6.0
-psutil
+psutil>=5.9
 
-# ── Bag reading ───────────────────────────────────────────────────────────────
-rosbags
+# ── Point cloud / mesh (CI-safe, x86 pip wheels available) ───────────────────
+trimesh>=4.0
+rosbags                       # ROS 2 MCAP bag reading without a full ROS install
+
+# ── Camera / image ────────────────────────────────────────────────────────────
+opencv-python-headless>=4.9   # used by hailo_optical_flow, hailo_ground_class,
+                               # ortho_tools, texture_projector
+# picamera2 is Pi-only — not installable on x86. Install on Pi:
+#   pip install picamera2 --break-system-packages
+piexif>=1.1                   # GPS EXIF embedding in camera_capture.py
+
+# ── Web / telemetry ───────────────────────────────────────────────────────────
+websocket-client>=1.7         # rpi_health_node → meshview_telemetry_server WS
+websockets>=12.0              # meshview_telemetry_server async WS server
+
+# ── Mesh post-processing ──────────────────────────────────────────────────────
+Pillow>=10.0                  # ortho_tools tile fallback, image utilities
+# pymeshlab  →  conda install -c conda-forge pymeshlab   (no aarch64 pip wheel)
 
 # ── Testing ───────────────────────────────────────────────────────────────────
 pytest>=8.0
 
-# ── NOT included here (no pip wheels for aarch64 / require conda-forge) ──────
+# ── NOT included (no pip wheels for aarch64; use conda-forge on the Pi) ──────
 # open3d>=0.19   →  conda install -c conda-forge open3d
 # pdal>=3.5      →  conda install -c conda-forge pdal
 # pymeshlab      →  conda install -c conda-forge pymeshlab
-#
-# ── GitHub repos to clone (done by setup.sh, listed here for reference) ──────
+
+# ── GitHub repos to clone (done by setup.sh; listed here for reference) ──────
 # Unitree L1 driver:  https://github.com/unitreerobotics/unilidar_sdk.git
 # Point-LIO ROS 2:    https://github.com/dfloreaa/point_lio_ros2.git
-#
-# ── System packages (apt, done by setup.sh) ───────────────────────────────────
+
+# ── System packages (apt; done by setup.sh) ───────────────────────────────────
+# ros-jazzy-ros-base ros-jazzy-ros-dev-tools
 # ros-jazzy-mavros ros-jazzy-mavros-msgs ros-jazzy-mavros-extras
 # ros-jazzy-foxglove-bridge
 # ros-jazzy-pcl-ros ros-jazzy-pcl-conversions
 # ros-jazzy-tf2-ros ros-jazzy-tf2-geometry-msgs
 # ros-jazzy-visualization-msgs
+# ros-jazzy-cv-bridge                       (TextureNode, HailoFlightNode image bridge)
+# python3-colcon-common-extensions
+# python3-rosdep
+# gdal-bin                                  (ortho_tools gdal2tiles)
+
+# ── Pi-only system packages (apt; not installable on x86) ─────────────────────
+# rpi-lgpio                                 (GPIO LED service)
+# libcamera-dev rpicam-apps                 (CameraCapture / Picamera2 backend)
